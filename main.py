@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 """PHP2Shell honeypot for CVE-2026-109618 and CVE-2026-109619.
 
-A *safe* high-interaction HTTP honeypot.  It emulates the parts of an Apache +
-PHP-FPM file portal that attackers probe during PHP2Shell exploitation, records
-the telemetry, and never executes, includes, evaluates or writes attacker code
+A safe high-interaction HTTP honeypot. It emulates the parts of an Apache + PHP-FPM file portal that attackers probe during PHP2Shell exploitation, records the telemetry, and never executes, includes, evaluates or writes attacker code 
 into an executable location.
 
-Design rules enforced in this file:
-  * request bodies are streamed to a bounded spool; they are never parsed by PHP
-  * payloads are only ever stored under ``captured_payloads/`` as inert bytes
-  * no subprocess, eval, exec, shell, include or dynamic import of telemetry
-  * responses are static templates rendered by this process
 """
 
 from __future__ import annotations
