@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.smoke/
+logs/
+captured_payloads/
+certs/
+*.spool
+.DS_Store

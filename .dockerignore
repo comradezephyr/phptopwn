@@ -1,0 +1,13 @@
+.git
+.gitignore
+__pycache__
+*.py[cod]
+.venv
+venv
+.smoke
+logs
+captured_payloads
+certs
+tests
+README.md
+docker-compose.yml
