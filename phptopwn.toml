@@ -1,0 +1,70 @@
+# phptopwn runtime configuration.
+#
+# Precedence: built-in defaults < this file < environment (PHPTOPWN_<FIELD>) < CLI flags.
+# Relative paths resolve against the current working directory.
+# Every value below is also the built-in default; keep this file in sync with docs/CONFIG.md.
+
+[sensor]
+host = "0.0.0.0"
+http_port = 8080
+tls_port = 8443
+tls_enabled = false
+cert_file = "certs/honeypot.crt"
+key_file = "certs/honeypot.key"
+trust_proxy_headers = false          # only behind a proxy that overwrites X-Forwarded-For
+
+[storage]
+log_dir = "logs"
+capture_dir = "captured_payloads"
+max_body_bytes = 33554432            # 32 MiB hard body cap
+probe_bytes = 2097152                # bytes kept in memory for analysis
+max_artifact_bytes = 4194304         # max bytes quarantined per artifact
+max_artifact_parts = 8               # max uploaded parts quarantined per request
+body_timeout_seconds = 30.0          # per-chunk read timeout (slowloris cut-off)
+neutralize_capture_names = true      # quarantine files as <sha256>.bin, never .php
+
+[limits]
+max_concurrency = 200                # global uvicorn concurrency cap (0 disables)
+max_concurrent_per_ip = 32           # in-flight requests per source IP (0 disables)
+rate_limit_per_minute = 600          # requests per source IP per rolling minute (0 disables)
+max_request_headers = 128            # reject requests with more headers than this
+max_header_bytes = 32768             # reject requests whose header block exceeds this
+
+[retention]
+max_capture_files = 5000
+max_age_days = 30
+max_log_bytes = 52428800             # rotate exploits.json/iocs.txt at 50 MiB
+max_log_archives = 5
+sweep_interval_seconds = 600
+
+[detection]
+large_multipart_bytes = 1048576      # CVE-2026-109618 upload-size threshold
+many_parts = 32                      # CVE-2026-109618 part-count threshold
+part_header_bytes = 4096             # per-part header-size threshold
+header_count = 60                    # header-count signal threshold
+header_bytes = 16384                 # header-bytes signal threshold
+slow_gap_seconds = 2.0               # TCP pause threshold (CVE-2026-109619)
+slow_total_seconds = 5.0             # slow body total-duration threshold
+log_all_requests = true
+
+[alerts]
+webhook_url = ""                     # e.g. https://discord.com/api/webhooks/...
+min_severity = "high"
+cooldown_seconds = 60.0              # per source IP
+timeout_seconds = 5.0
+max_inflight = 8
+
+[decoy]
+server_token = "Apache/2.4.52 (Ubuntu)"
+powered_by = "PHP/8.1.2"
+php_version = "8.1.2"
+memory_limit = "128M"
+server_name = "intranet.acme.local"
+
+[internal]
+metrics_host = "127.0.0.1"           # set 0.0.0.0 inside a private Docker network
+metrics_port = 9091
+
+[logging]
+level = "INFO"
+json = true                          # one JSON object per operational log line

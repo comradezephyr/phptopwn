@@ -1,31 +1,27 @@
-# PHP2Shell threat-intelligence honeypot
-# Deliberately *not* based on php/apache: only the wire behaviour is emulated.
-FROM python:3.11-slim
+# PHP2Shell honeypot sensor
+# Deliberately *not* based on php/apache images: only the wire behaviour is emulated.
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    HONEYPOT_HTTP_PORT=8080 \
-    HONEYPOT_HTTPS_PORT=8443
-
-WORKDIR /app
+    PHPTOPWN_HTTP_PORT=8080 \
+    PHPTOPWN_TLS_PORT=8443
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 1000 honeypot \
-    && useradd --system --uid 1000 --gid honeypot --home-dir /app --shell /usr/sbin/nologin honeypot
+    && groupadd --system --gid 1000 phptopwn \
+    && useradd --system --uid 1000 --gid phptopwn --home-dir /app --shell /usr/sbin/nologin phptopwn
 
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /app
 
-COPY main.py ./
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+COPY . .
+RUN pip install --no-cache-dir . \
     && mkdir -p /app/logs /app/captured_payloads /app/certs \
-    && chown -R honeypot:honeypot /app
+    && chown -R phptopwn:phptopwn /app
 
-USER honeypot
+USER phptopwn
 
 EXPOSE 8080 8443
 

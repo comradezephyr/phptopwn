@@ -93,19 +93,19 @@ def build_env(tmp: Path, **overrides: object) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "HONEYPOT_HTTP_PORT": str(PORT),
-            "HONEYPOT_LOG_DIR": str(tmp / "logs"),
-            "HONEYPOT_PAYLOAD_DIR": str(tmp / "payloads"),
-            "HONEYPOT_TMP_DIR": str(tmp / "tmp"),
-            "HONEYPOT_LARGE_MULTIPART_BYTES": "2048",
-            "HONEYPOT_MANY_PARTS": "4",
-            "HONEYPOT_PART_HEADER_BYTES": "256",
-            "HONEYPOT_SLOW_GAP_SECONDS": "0.2",
-            "HONEYPOT_SLOW_TOTAL_SECONDS": "0.6",
-            "HONEYPOT_BODY_TIMEOUT_SECONDS": "1.5",
-            "HONEYPOT_MAX_ARTIFACT_BYTES": "1048576",
-            "HONEYPOT_MAX_ARTIFACT_PARTS": "8",
-            "HONEYPOT_LOG_LEVEL": "INFO",
+            "PHPTOPWN_HTTP_PORT": str(PORT),
+            "PHPTOPWN_LOG_DIR": str(tmp / "logs"),
+            "PHPTOPWN_CAPTURE_DIR": str(tmp / "payloads"),
+            "PHPTOPWN_LARGE_MULTIPART_BYTES": "2048",
+            "PHPTOPWN_MANY_PARTS": "4",
+            "PHPTOPWN_PART_HEADER_BYTES": "256",
+            "PHPTOPWN_SLOW_GAP_SECONDS": "0.2",
+            "PHPTOPWN_SLOW_TOTAL_SECONDS": "0.6",
+            "PHPTOPWN_BODY_TIMEOUT_SECONDS": "1.5",
+            "PHPTOPWN_MAX_ARTIFACT_BYTES": "1048576",
+            "PHPTOPWN_MAX_ARTIFACT_PARTS": "8",
+            "PHPTOPWN_LOG_LEVEL": "INFO",
+            "PHPTOPWN_METRICS_PORT": "18099",
         }
     )
     env.update({key: str(value) for key, value in overrides.items()})
@@ -118,7 +118,7 @@ def start_server(
     log_path = workdir / f"{name}.log"
     handle = log_path.open("wb")
     process = subprocess.Popen(
-        [sys.executable, str(ROOT / "main.py")],
+        [sys.executable, "-m", "phptopwn"],
         cwd=str(ROOT),
         env=env,
         stdout=handle,
@@ -316,7 +316,7 @@ def run_checks(tmp: Path, env: dict[str, str]) -> None:
     # 6. Quarantined artifacts use SHA-256 filenames and exact bytes
     # ---------------------------------------------------------------- #
     payload_hash = hashlib.sha256(PAYLOAD).hexdigest()
-    payload_file = payload_dir / f"{payload_hash}.php"
+    payload_file = payload_dir / f"{payload_hash}.bin"
     check(payload_file.exists(), f"quarantined payload missing: {payload_file.name}")
     check(payload_file.read_bytes() == PAYLOAD, "quarantined payload bytes changed")
     check(len(payload_file.stem) == 64, "payload filename is not a SHA-256 digest")
@@ -424,11 +424,11 @@ def run_tls_check(tmp: Path) -> None:
     plain_port = PORT + 2
     env = build_env(
         tmp / "tls",
-        HONEYPOT_HTTP_PORT=plain_port,
-        HONEYPOT_HTTPS_PORT=tls_port,
-        HONEYPOT_TLS="true",
-        HONEYPOT_CERT_FILE=str(cert_file),
-        HONEYPOT_KEY_FILE=str(key_file),
+        PHPTOPWN_HTTP_PORT=plain_port,
+        PHPTOPWN_TLS_PORT=tls_port,
+        PHPTOPWN_TLS="true",
+        PHPTOPWN_CERT_FILE=str(cert_file),
+        PHPTOPWN_KEY_FILE=str(key_file),
     )
     process, log_path = start_server(env, tmp, "tls-server")
     try:

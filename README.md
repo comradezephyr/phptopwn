@@ -23,11 +23,11 @@ interpreter. No request byte is ever executed.
 * **No PHP engine, no shell, no `eval`/`exec`/`subprocess` on request data.**
   Responses are static HTML/PHP-error templates rendered by Python.
 * **Bounded streaming reads.** Request bodies are consumed chunk-by-chunk into
-  a `SpooledTemporaryFile` with a hard cap (`HONEYPOT_MAX_BODY_BYTES`, 32 MiB by
-  default) and an analysis probe (`HONEYPOT_PROBE_BYTES`, 2 MiB). Huge PHP2Shell
+  a `SpooledTemporaryFile` with a hard cap (`PHPTOPWN_MAX_BODY_BYTES`, 32 MiB by
+  default) and an analysis probe (`PHPTOPWN_PROBE_BYTES`, 2 MiB). Huge PHP2Shell
   uploads therefore consume fixed, small memory.
 * **Read timeout.** A client that announces a body and stalls is cut off after
-  `HONEYPOT_BODY_TIMEOUT_SECONDS` (30 s) with `408 Request Timeout`.
+  `PHPTOPWN_BODY_TIMEOUT_SECONDS` (30 s) with `408 Request Timeout`.
 * **Quarantine, not execution.** Payloads are written as inert bytes to
   `captured_payloads/`, named only by SHA-256. That directory is never routed or
   served and is deliberately excluded from the container image.
@@ -66,16 +66,17 @@ interpreter. No request byte is ever executed.
 
 ```text
 .
-├── main.py                    # asyncio/FastAPI honeypot, parsing + detection
-├── requirements.txt           # fastapi, uvicorn[standard], pydantic
+├── phptopwn/                    # sensor package (config, parsing, detection, ...)
+├── phptopwn.toml                # documented default configuration
+├── pyproject.toml               # packaging (PEP 621), pinned dependencies
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker/
-│   └── entrypoint.sh          # optional self-signed TLS certificate bootstrap
+│   └── entrypoint.sh            # optional self-signed TLS certificate bootstrap
 ├── tests/
-│   └── smoke_test.py          # stdlib-only end-to-end verification
-├── logs/                      # created at runtime (exploits.json, iocs.txt)
-└── captured_payloads/         # created at runtime (quarantined bytes)
+│   └── smoke_test.py            # stdlib-only end-to-end verification
+├── logs/                        # created at runtime (exploits.json, iocs.txt)
+└── captured_payloads/           # created at runtime (quarantined bytes)
 ```
 
 ---
@@ -87,8 +88,8 @@ interpreter. No request byte is ever executed.
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
-python main.py
+pip install .
+phptopwn                  # or: phptopwn --config path/to/phptopwn.toml
 ```
 
 Verify:
@@ -96,6 +97,7 @@ Verify:
 ```bash
 curl -i http://127.0.0.1:8080/
 curl -i http://127.0.0.1:8080/phpinfo.php
+phptopwn --dry-run        # print the resolved configuration and exit
 ```
 
 ### Docker Compose (ports 80 / 443)
@@ -127,7 +129,7 @@ ports:
 
 ### TLS without Docker
 
-Generate a certificate and point the honeypot at it:
+Generate a certificate and point the sensor at it:
 
 ```bash
 mkdir -p certs
@@ -135,12 +137,10 @@ openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
   -keyout certs/honeypot.key -out certs/honeypot.crt \
   -subj "/CN=intranet.acme.local"
 
-HONEYPOT_TLS=true \
-HONEYPOT_CERT_FILE=./certs/honeypot.crt \
-HONEYPOT_KEY_FILE=./certs/honeypot.key \
-HONEYPOT_HTTP_PORT=8080 \
-HONEYPOT_HTTPS_PORT=8443 \
-python main.py
+PHPTOPWN_TLS=true \
+PHPTOPWN_CERT_FILE=./certs/honeypot.crt \
+PHPTOPWN_KEY_FILE=./certs/honeypot.key \
+phptopwn
 ```
 
 The plain HTTP listener stays available on 8080; the TLS listener runs in the
@@ -149,55 +149,61 @@ store.
 
 ### Uvicorn CLI
 
-`python main.py` is preferred because it starts the TLS listener too. If you use
-Uvicorn directly, disable its own server header so the Apache fingerprint is not
-duplicated:
+`phptopwn` is preferred because it starts the TLS listener too. If you use
+Uvicorn directly, disable its own server header so the Apache fingerprint is
+not duplicated:
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8080 --no-server-header
+uvicorn phptopwn.decoy:create_app --factory --host 0.0.0.0 --port 8080 --no-server-header
 ```
+
+Note that running Uvicorn by hand skips the internal metrics listener.
 
 ---
 
 ## Configuration
 
-All settings are environment variables; paths may be relative (resolved against
-the location of `main.py`) or absolute.
+Configuration lives in `phptopwn.toml` (documented inline, kept at the repo
+root and shipped with the package). Every value can be overridden with an
+environment variable named `PHPTOPWN_<FIELD>` — e.g. `http_port` becomes
+`PHPTOPWN_HTTP_PORT`, with a handful of aliases (`tls_enabled` →
+`PHPTOPWN_TLS`, `log_all_requests` → `PHPTOPWN_LOG_ALL`). Precedence:
+built-in defaults < TOML file < environment < CLI flags (`--host`, `--port`).
+Select a different file with `--config` or `PHPTOPWN_CONFIG`. See
+`phptopwn.toml` for the full annotated list.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HONEYPOT_HOST` | `0.0.0.0` | Bind address |
-| `HONEYPOT_HTTP_PORT` | `8080` (falls back to `PORT`) | Plain HTTP port |
-| `HONEYPOT_HTTPS_PORT` | `8443` | TLS port |
-| `HONEYPOT_TLS` | `false` | Enable the TLS listener |
-| `HONEYPOT_CERT_FILE` | `./certs/honeypot.crt` | TLS certificate (PEM) |
-| `HONEYPOT_KEY_FILE` | `./certs/honeypot.key` | TLS private key (PEM) |
-| `HONEYPOT_LOG_DIR` | `./logs` | Telemetry + IOC directory |
-| `HONEYPOT_PAYLOAD_DIR` | `./captured_payloads` | Quarantine directory |
-| `HONEYPOT_TMP_DIR` | `./logs/tmp` | Body spool directory |
-| `HONEYPOT_MAX_BODY_BYTES` | `33554432` (32 MiB) | Hard body capture cap |
-| `HONEYPOT_PROBE_BYTES` | `2097152` (2 MiB) | Bytes kept in memory for analysis |
-| `HONEYPOT_MAX_ARTIFACT_BYTES` | `4194304` (4 MiB) | Max bytes written per request body |
-| `HONEYPOT_MAX_ARTIFACT_PARTS` | `8` | Max uploaded parts quarantined per request |
-| `HONEYPOT_LARGE_MULTIPART_BYTES` | `1048576` (1 MiB) | CVE-2026-109618 size threshold |
-| `HONEYPOT_MANY_PARTS` | `32` | CVE-2026-109618 part-count threshold |
-| `HONEYPOT_PART_HEADER_BYTES` | `4096` | Per-part header-size threshold |
-| `HONEYPOT_HEADER_COUNT` | `60` | Request header-count threshold |
-| `HONEYPOT_HEADER_BYTES` | `16384` | Request header-byte threshold |
-| `HONEYPOT_SLOW_GAP_SECONDS` | `2.0` | TCP pause threshold (CVE-2026-109619) |
-| `HONEYPOT_SLOW_TOTAL_SECONDS` | `5.0` | Slow body total-duration threshold |
-| `HONEYPOT_BODY_TIMEOUT_SECONDS` | `30.0` | Per-chunk body read timeout |
-| `HONEYPOT_LOG_ALL` | `true` | Log benign requests too |
-| `HONEYPOT_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` for client IP |
-| `HONEYPOT_SERVER_TOKEN` | `Apache/2.4.52 (Ubuntu)` | `Server` response header |
-| `HONEYPOT_POWERED_BY` | `PHP/8.1.2` | `X-Powered-By` response header |
-| `HONEYPOT_PHP_VERSION` | `8.1.2` | Version shown on decoy pages |
-| `HONEYPOT_MEMORY_LIMIT` | `128M` | Value shown by the phpinfo decoy |
-| `HONEYPOT_SERVER_NAME` | `intranet.acme.local` | Hostname on error pages |
-| `HONEYPOT_LOG_LEVEL` | `INFO` | Python logging level |
-| `HONEYPOT_UVICORN_LOG_LEVEL` | `warning` | Uvicorn log level |
+| `PHPTOPWN_HOST` | `0.0.0.0` | Bind address |
+| `PHPTOPWN_HTTP_PORT` | `8080` | Plain HTTP port |
+| `PHPTOPWN_TLS_PORT` | `8443` | TLS port |
+| `PHPTOPWN_TLS` | `false` | Enable the TLS listener |
+| `PHPTOPWN_CERT_FILE` | `certs/honeypot.crt` | TLS certificate (PEM) |
+| `PHPTOPWN_KEY_FILE` | `certs/honeypot.key` | TLS private key (PEM) |
+| `PHPTOPWN_LOG_DIR` | `logs` | Telemetry + IOC directory |
+| `PHPTOPWN_CAPTURE_DIR` | `captured_payloads` | Quarantine directory |
+| `PHPTOPWN_MAX_BODY_BYTES` | `33554432` (32 MiB) | Hard body capture cap |
+| `PHPTOPWN_PROBE_BYTES` | `2097152` (2 MiB) | Bytes kept in memory for analysis |
+| `PHPTOPWN_MAX_ARTIFACT_BYTES` | `4194304` (4 MiB) | Max bytes written per artifact |
+| `PHPTOPWN_MAX_ARTIFACT_PARTS` | `8` | Max uploaded parts quarantined per request |
+| `PHPTOPWN_LARGE_MULTIPART_BYTES` | `1048576` (1 MiB) | CVE-2026-109618 size threshold |
+| `PHPTOPWN_MANY_PARTS` | `32` | CVE-2026-109618 part-count threshold |
+| `PHPTOPWN_PART_HEADER_BYTES` | `4096` | Per-part header-size threshold |
+| `PHPTOPWN_HEADER_COUNT` | `60` | Request header-count signal threshold |
+| `PHPTOPWN_HEADER_BYTES` | `16384` | Request header-byte signal threshold |
+| `PHPTOPWN_SLOW_GAP_SECONDS` | `2.0` | TCP pause threshold (CVE-2026-109619) |
+| `PHPTOPWN_SLOW_TOTAL_SECONDS` | `5.0` | Slow body total-duration threshold |
+| `PHPTOPWN_BODY_TIMEOUT_SECONDS` | `30.0` | Per-chunk body read timeout |
+| `PHPTOPWN_LOG_ALL` | `true` | Log benign requests too |
+| `PHPTOPWN_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` for client IP |
+| `PHPTOPWN_SERVER_TOKEN` | `Apache/2.4.52 (Ubuntu)` | `Server` response header |
+| `PHPTOPWN_POWERED_BY` | `PHP/8.1.2` | `X-Powered-By` response header |
+| `PHPTOPWN_PHP_VERSION` | `8.1.2` | Version shown on decoy pages |
+| `PHPTOPWN_MEMORY_LIMIT` | `128M` | Value shown by the phpinfo decoy |
+| `PHPTOPWN_SERVER_NAME` | `intranet.acme.local` | Hostname on error pages |
+| `PHPTOPWN_LOG_LEVEL` | `INFO` | Python logging level |
 
-Do **not** enable `HONEYPOT_TRUST_PROXY_HEADERS` unless the sensor is behind a
+Do **not** enable `PHPTOPWN_TRUST_PROXY_HEADERS` unless the sensor is behind a
 trusted reverse proxy; otherwise attackers can spoof their source IP in logs and
 the IOC blocklist.
 
@@ -211,9 +217,9 @@ Signals emitted with `"cve": "CVE-2026-109618"`:
 
 | Signal id | Severity | Trigger |
 | --- | --- | --- |
-| `large_multipart_upload` | high | Multipart POST/PUT >= `HONEYPOT_LARGE_MULTIPART_BYTES` |
-| `excessive_multipart_parts` | high | >= `HONEYPOT_MANY_PARTS` parts |
-| `oversized_part_headers` | high | A part header block >= `HONEYPOT_PART_HEADER_BYTES` |
+| `large_multipart_upload` | high | Multipart POST/PUT >= `PHPTOPWN_LARGE_MULTIPART_BYTES` |
+| `excessive_multipart_parts` | high | >= `PHPTOPWN_MANY_PARTS` parts |
+| `oversized_part_headers` | high | A part header block >= `PHPTOPWN_PART_HEADER_BYTES` |
 | `mass_file_upload_fields` | high | >= 8 file fields in one request |
 | `content_length_overflow` | high | Declared `Content-Length` > capture cap |
 | `truncated_request_body` | high | Delivered bytes < declared `Content-Length` |
@@ -250,10 +256,10 @@ Signals emitted with `"cve": "CVE-2026-109619"`:
 | `php_ini_override_header` | high | `PHP_VALUE`, `PHP_ADMIN_VALUE`, `PHP_SESSION_UPLOAD_PROGRESS`, `PHP_INI` headers |
 | `php_ini_override_payload` | high | `allow_url_include`, `auto_prepend_file`, `auto_append_file`, `disable_functions` in the body |
 | `session_progress_webshell_race` | high | Session-progress markers **and** PHP code in one request |
-| `tcp_stream_pause` | high | Inter-chunk gap >= `HONEYPOT_SLOW_GAP_SECONDS` |
-| `slow_body_delivery` | high | Body takes >= `HONEYPOT_SLOW_TOTAL_SECONDS` |
+| `tcp_stream_pause` | high | Inter-chunk gap >= `PHPTOPWN_SLOW_GAP_SECONDS` |
+| `slow_body_delivery` | high | Body takes >= `PHPTOPWN_SLOW_TOTAL_SECONDS` |
 | `incomplete_upload_stream` | high | Stream ends before the declared body |
-| `body_read_timeout` | high | Client stalls past `HONEYPOT_BODY_TIMEOUT_SECONDS` |
+| `body_read_timeout` | high | Client stalls past `PHPTOPWN_BODY_TIMEOUT_SECONDS` |
 | `body_exceeds_capture_cap` | medium | Body larger than the capture cap |
 
 Timing is measured inside the ASGI `receive()` loop, so pauses are visible even
@@ -277,7 +283,7 @@ known scanners). A request is marked `is_exploit: true` when any signal is
 **JSON Lines**: one complete JSON object per line, append-only. The `.json`
 name is intentional for tooling compatibility; use `jq` or a streaming reader
 rather than loading it as a JSON array. A record is written for every exploit
-request and, when `HONEYPOT_LOG_ALL=true`, for benign requests as well.
+request and, when `PHPTOPWN_LOG_ALL=true`, for benign requests as well.
 
 Abridged example:
 
@@ -349,7 +355,7 @@ fields, signal evidence, command strings, IOCs, response status and artifacts.
   `size`, `original_filename`, `content_type`, `truncated`, `first_seen`,
   `request_id`, `source_ip`.
 * Deduplication is by SHA-256: repeated payloads are not written again.
-* Large artifacts are capped (`HONEYPOT_MAX_ARTIFACT_BYTES`) and marked
+* Large artifacts are capped (`PHPTOPWN_MAX_ARTIFACT_BYTES`) and marked
   `truncated: true`; partial uploads are marked in the same way.
 
 ### `logs/iocs.txt`
@@ -468,13 +474,13 @@ curl -i -F 'file=@/tmp/large.bin;filename=big.php' \
   `exploits.json` (e.g. `logrotate` with `copytruncate`) or ship JSONL to your
   SIEM and truncate.
 * Monitor disk usage: the body cap limits each request, but volumetric scanning
-  still produces many records. Set `HONEYPOT_LOG_ALL=false` if you only want
+  still produces many records. Set `PHPTOPWN_LOG_ALL=false` if you only want
   exploit records.
-* Tune `HONEYPOT_LARGE_MULTIPART_BYTES` / `HONEYPOT_SLOW_GAP_SECONDS` to your
+* Tune `PHPTOPWN_LARGE_MULTIPART_BYTES` / `PHPTOPWN_SLOW_GAP_SECONDS` to your
   traffic baseline. Lower thresholds increase sensitivity and false positives.
 * The TLS certificate generated by `docker/entrypoint.sh` is self-signed and for
   deception only; do not reuse it anywhere else.
-* `HONEYPOT_TRUST_PROXY_HEADERS` must stay `false` unless the sensor is behind a
+* `PHPTOPWN_TRUST_PROXY_HEADERS` must stay `false` unless the sensor is behind a
   trusted proxy that overwrites `X-Forwarded-For`.
 * Never enable PHP, Apache modules, CGI or FPM on the same host to "make the
   decoy more realistic". The Python emulation is the safety boundary.

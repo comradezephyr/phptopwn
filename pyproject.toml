@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phptopwn"
+description = "High-interaction HTTP honeypot sensor for PHP2Shell exploitation attempts"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "phptopwn maintainers" }]
+keywords = ["honeypot", "http", "php", "detection", "security"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+dependencies = [
+    "fastapi==0.162.0",
+    "uvicorn==0.54.0",
+    "prometheus-client==0.26.0",
+    "httpx==0.28.1",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.2.0",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.4",
+    "mypy==2.4.1",
+]
+
+[project.scripts]
+phptopwn = "phptopwn.cli:main"
+
+[tool.setuptools]
+packages = ["phptopwn"]
+
+[tool.setuptools.package-data]
+phptopwn = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "phptopwn.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+branch = true
+source = ["phptopwn"]
+omit = ["phptopwn/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"phptopwn/pages.py" = ["E501"]  # HTML error-page templates are not wrapped
+
+[tool.mypy]
+python_version = "3.11"
+files = ["phptopwn"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
