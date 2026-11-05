@@ -24,8 +24,10 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,8 +67,9 @@ def http_request(
     body: bytes | None = None,
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
+    port: int = PORT,
 ) -> tuple[int, dict[str, str], bytes]:
-    connection = http.client.HTTPConnection(HOST, PORT, timeout=timeout)
+    connection = http.client.HTTPConnection(HOST, port, timeout=timeout)
     connection.request(method, path, body=body, headers=headers or {})
     response = connection.getresponse()
     payload = response.read()
@@ -82,6 +85,20 @@ def http_request(
 def internal_healthz(timeout: float = 10.0) -> tuple[int, dict[str, str], bytes]:
     connection = http.client.HTTPConnection(HOST, METRICS_PORT, timeout=timeout)
     connection.request("GET", "/healthz")
+    response = connection.getresponse()
+    payload = response.read()
+    result = (
+        response.status,
+        {name.lower(): value for name, value in response.getheaders()},
+        payload,
+    )
+    connection.close()
+    return result
+
+
+def internal_metrics(timeout: float = 10.0) -> tuple[int, dict[str, str], bytes]:
+    connection = http.client.HTTPConnection(HOST, METRICS_PORT, timeout=timeout)
+    connection.request("GET", "/metrics")
     response = connection.getresponse()
     payload = response.read()
     result = (
@@ -409,6 +426,144 @@ def run_checks(tmp: Path, env: dict[str, str]) -> None:
         "raw request headers not captured",
     )
 
+    # ---------------------------------------------------------------- #
+    # 9. Prometheus exposition on the internal listener
+    # ---------------------------------------------------------------- #
+    status, headers, body = internal_metrics()
+    check(status == 200, f"internal /metrics returned {status}")
+    check(headers.get("content-type", "").startswith("text/plain"), headers.get("content-type"))
+    for expected in (
+        b"phptopwn_uptime_seconds",
+        b'phptopwn_requests_total{kind="exploit"}',
+        b"phptopwn_body_bytes_total",
+        b"phptopwn_request_rate_per_minute",
+        b"phptopwn_last_exploit_at_seconds",
+    ):
+        check(expected in body, f"/metrics missing series {expected.decode()}")
+    check(
+        b'signature="php_session_upload_progress"' in body,
+        "signal hits not exported per signature",
+    )
+    check(b'ip="127.0.0.1"' in body, "top-client series missing attacker IP")
+    check(b"phptopwn_guard_rejections_total" in body, "guard rejection series missing")
+    check(b"phptopwn_alerts_total" in body, "alert outcome series missing")
+
+
+def check_json_log_lines(log_path: Path) -> None:
+    """The default json=true format keeps every operational line parseable."""
+    text = log_path.read_text(errors="replace")
+    structured = 0
+    banner_found = False
+    for line in text.splitlines():
+        if not line.startswith("{"):
+            continue
+        payload = json.loads(line)
+        for key in ("timestamp", "level", "logger", "message"):
+            check(key in payload, f"structured log line missing key {key}: {line[:120]}")
+        structured += 1
+        if "phptopwn listening on" in payload["message"]:
+            banner_found = True
+    check(structured >= 3, f"too few structured log lines: {structured}")
+    check(banner_found, "startup banner is not logged as structured JSON")
+
+
+def run_alert_check(tmp: Path) -> None:
+    """Alerts: severe exploits reach the webhook; the per-IP meter keeps it quiet."""
+    received: list[dict] = []
+
+    class Sink(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            length = int(self.headers.get("content-length", "0"))
+            body = self.rfile.read(length)
+            self.send_response(204)
+            self.end_headers()
+            try:
+                received.append(json.loads(body))
+            except ValueError:
+                received.append({"invalid": True})
+
+        def log_message(self, *args) -> None:  # keep Ubuntu-style silence
+            pass
+
+    sink = HTTPServer((HOST, 0), Sink)
+    sink_port = sink.server_address[1]
+    sink_thread = threading.Thread(target=sink.serve_forever, daemon=True)
+    sink_thread.start()
+    try:
+        alert_port = PORT + 3
+        env = build_env(
+            tmp / "alerts",
+            PHPTOPWN_HTTP_PORT=alert_port,
+            PHPTOPWN_METRICS_PORT=str(METRICS_PORT + 4),
+            PHPTOPWN_WEBHOOK_URL=f"http://{HOST}:{sink_port}/hook",
+            PHPTOPWN_MIN_SEVERITY="low",
+            PHPTOPWN_COOLDOWN_SECONDS="2.0",
+        )
+        process, log_path = start_server(env, tmp, "alert-server")
+        try:
+            wait_ready(alert_port)
+            body, boundary = multipart_body(
+                [
+                    {"name": "PHP_SESSION_UPLOAD_PROGRESS", "data": "alerttest"},
+                    {"name": "file", "filename": "pwn.php", "content_type": "application/x-php", "data": PAYLOAD},
+                ]
+            )
+            status, _, _ = http_request(
+                "POST",
+                "/upload.php",
+                body,
+                {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"},
+                port=alert_port,
+            )
+            check(status == 200, f"alert-check exploit upload returned {status}")
+            deadline = time.time() + 10.0
+            while len(received) < 1 and time.time() < deadline:
+                time.sleep(0.1)
+            check(len(received) >= 1, "webhook never received the exploit alert")
+            if received:
+                alert = received[0]
+                check(alert.get("sensor") == "phptopwn", f"alert payload wrong sensor: {alert}")
+                check(alert.get("client_ip") == HOST, f"alert payload wrong IP: {alert}")
+                check(alert.get("severity") in ("high", "critical"), f"alert severity too low: {alert}")
+                check("CVE-2026-109619" in alert.get("cves", []), f"alert missing CVE: {alert}")
+                check(
+                    any(request_id for request_id in [alert.get("request_id")]),
+                    "alert missing request id",
+                )
+
+            # Second exploit straight away must be metered by the per-IP cooldown.
+            status, _, _ = http_request(
+                "POST",
+                "/upload.php",
+                body,
+                {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"},
+                port=alert_port,
+            )
+            check(status == 200, f"alert-check second upload returned {status}")
+            time.sleep(1.0)
+            check(len(received) == 1, f"cooldown did not meter the second alert: {len(received)}")
+
+            # After the cooldown elapses a fresh alert may fire again.
+            deadline = time.time() + 8.0
+            while time.time() < deadline:
+                status, _, _ = http_request(
+                    "POST",
+                    "/upload.php",
+                    body,
+                    {"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"},
+                    port=alert_port,
+                )
+                if len(received) >= 2:
+                    break
+                time.sleep(0.5)
+            check(len(received) >= 2, f"no alert after cooldown elapsed: {len(received)}")
+        finally:
+            stop_server(process, log_path)
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        sink_thread.join(timeout=2.0)
+
 
 def run_tls_check(tmp: Path) -> None:
     if not shutil.which("openssl"):
@@ -480,7 +635,9 @@ def main() -> int:
     try:
         wait_ready()
         run_checks(tmp, env)
+        check_json_log_lines(log_path)
         run_tls_check(tmp)
+        run_alert_check(tmp)
     except Exception:
         traceback.print_exc()
         if log_path.exists():
@@ -497,7 +654,8 @@ def main() -> int:
 
     print("PASS: decoy routes, Apache/PHP headers, CVE-2026-109618, CVE-2026-109619,")
     print("      paused TCP stream detection, stalled-upload timeout, payload quarantine,")
-    print("      SHA-256 manifest, IOC blocklist and TLS listener all verified.")
+    print("      SHA-256 manifest, IOC blocklist, JSON logs, Prometheus metrics,")
+    print("      webhook alerting and TLS listener all verified.")
     return 0
 
 

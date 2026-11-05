@@ -136,6 +136,8 @@ _SECTION_TYPES = {
 _ENV_RENAMES = {
     ("sensor", "tls_enabled"): "PHPTOPWN_TLS",
     ("detection", "log_all_requests"): "PHPTOPWN_LOG_ALL",
+    ("logging", "level"): "PHPTOPWN_LOG_LEVEL",
+    ("logging", "json"): "PHPTOPWN_LOG_JSON",
 }
 
 

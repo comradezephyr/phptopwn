@@ -8,15 +8,18 @@ import uvicorn
 
 from .config import Config
 from .decoy import create_app
+from .logs import JsonFormatter
 from .metrics import build_internal_app
 from .runtime import Sensor
 
 LOG = logging.getLogger("phptopwn.server")
 
+_TEXT_FORMAT = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+
 
 def setup_logging(cfg: Config) -> None:
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.setFormatter(JsonFormatter() if cfg.logging.json else _TEXT_FORMAT)
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(cfg.logging.level.upper())
@@ -28,6 +31,7 @@ def _uvicorn_config(app: object, cfg: Config, port: int, tls: bool = False) -> u
         "host": cfg.sensor.host,
         "port": port,
         "log_level": cfg.logging.level.lower(),
+        "log_config": {"version": 1, "disable_existing_loggers": False},
         "access_log": False,
         "server_header": False,
         "proxy_headers": False,

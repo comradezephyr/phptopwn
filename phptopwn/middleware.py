@@ -113,6 +113,7 @@ class TelemetryMiddleware:
             finally:
                 self.sensor.metrics.observe_capture(capture)
                 await self.sensor.store.persist(capture)
+                self.sensor.alerts.maybe_dispatch(capture)
         finally:
             self.sensor.guard.release(ip)
 

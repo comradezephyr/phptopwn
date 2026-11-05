@@ -6,6 +6,7 @@ import logging
 import time
 from collections import OrderedDict, deque
 
+from .alerts import AlertHub
 from .capture import RequestCapture
 from .config import Config
 from .storage import ArtifactStore, retention_sweep, utc_now
@@ -70,6 +71,10 @@ class Metrics:
             "exploits": 0,
             "benign": 0,
             "errors": 0,
+            "alerts_sent": 0,
+            "alerts_failed": 0,
+            "alerts_metered": 0,
+            "alerts_overflow": 0,
         }
         self.signatures: dict[str, int] = {}
         self.ip_totals: OrderedDict[str, int] = OrderedDict()
@@ -156,6 +161,7 @@ class Sensor:
         self.store = ArtifactStore(cfg)
         self.metrics = Metrics()
         self.guard = SourceGuard(cfg.limits.max_concurrent_per_ip, cfg.limits.rate_limit_per_minute)
+        self.alerts = AlertHub(cfg, self.metrics)
         self._tasks: list[asyncio.Task[None]] = []
 
     def open(self) -> None:
@@ -170,6 +176,7 @@ class Sensor:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        await self.alerts.close()
 
 
 async def retention_loop(cfg: Config) -> None:

@@ -167,7 +167,8 @@ Configuration lives in `phptopwn.toml` (documented inline, kept at the repo
 root and shipped with the package). Every value can be overridden with an
 environment variable named `PHPTOPWN_<FIELD>` — e.g. `http_port` becomes
 `PHPTOPWN_HTTP_PORT`, with a handful of aliases (`tls_enabled` →
-`PHPTOPWN_TLS`, `log_all_requests` → `PHPTOPWN_LOG_ALL`). Precedence:
+`PHPTOPWN_TLS`, `log_all_requests` → `PHPTOPWN_LOG_ALL`, `logging.level` →
+`PHPTOPWN_LOG_LEVEL`, `logging.json` → `PHPTOPWN_LOG_JSON`). Precedence:
 built-in defaults < TOML file < environment < CLI flags (`--host`, `--port`).
 Select a different file with `--config` or `PHPTOPWN_CONFIG`. See
 `phptopwn.toml` for the full annotated list.
@@ -202,6 +203,12 @@ Select a different file with `--config` or `PHPTOPWN_CONFIG`. See
 | `PHPTOPWN_MEMORY_LIMIT` | `128M` | Value shown by the phpinfo decoy |
 | `PHPTOPWN_SERVER_NAME` | `intranet.acme.local` | Hostname on error pages |
 | `PHPTOPWN_LOG_LEVEL` | `INFO` | Python logging level |
+| `PHPTOPWN_LOG_JSON` | `true` | Emit one JSON object per operational log line |
+| `PHPTOPWN_METRICS_HOST` | `127.0.0.1` | Internal listener bind (`/healthz`, `/metrics`) |
+| `PHPTOPWN_METRICS_PORT` | `9091` | Internal listener port |
+| `PHPTOPWN_WEBHOOK_URL` | *(empty)* | Webhook to POST exploit alerts to |
+| `PHPTOPWN_MIN_SEVERITY` | `high` | Lowest analysis severity that raises an alert |
+| `PHPTOPWN_COOLDOWN_SECONDS` | `60.0` | Minimum spacing between alerts per source IP |
 
 Do **not** enable `PHPTOPWN_TRUST_PROXY_HEADERS` unless the sensor is behind a
 trusted reverse proxy; otherwise attackers can spoof their source IP in logs and
