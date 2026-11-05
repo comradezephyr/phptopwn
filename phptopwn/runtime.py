@@ -1,19 +1,68 @@
-"""Shared runtime state for one running sensor instance."""
+"""Shared runtime state: sensor wiring, source guards, background sweeps."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections import OrderedDict, deque
-from typing import Any
 
+from .capture import RequestCapture
 from .config import Config
-from .storage import ArtifactStore, utc_now
+from .storage import ArtifactStore, retention_sweep, utc_now
+
+LOG = logging.getLogger("phptopwn.sensor")
 
 _MAX_TRACKED_IPS = 8192
 _MAX_TRACKED_SIGNALS = 256
 
 
+class SourceGuard:
+    """Per-source-IP in-memory limits: concurrency and rolling-minute rate."""
+
+    def __init__(self, max_concurrent: int, rate_per_minute: int) -> None:
+        self.max_concurrent = max_concurrent
+        self.rate_per_minute = rate_per_minute
+        self._inflight: dict[str, int] = {}
+        self._recent: OrderedDict[str, deque[float]] = OrderedDict()
+        self._capacity = 16384
+
+    def acquire(self, ip: str) -> str | None:
+        """Count one request from this source; return a rejection reason or None."""
+        now = time.monotonic()
+        if self.rate_per_minute:
+            window = self._recent.get(ip)
+            if window is None:
+                window = deque()
+                self._recent[ip] = window
+                self._recent.move_to_end(ip)
+                while len(self._recent) > self._capacity:
+                    self._recent.popitem(last=False)
+            while window and now - window[0] > 60.0:
+                window.popleft()
+            window.append(now)
+            if len(window) > self.rate_per_minute:
+                return "rate_limited"
+        if self.max_concurrent:
+            active = self._inflight.get(ip, 0)
+            if active >= self.max_concurrent:
+                return "concurrent_limit"
+            self._inflight[ip] = active + 1
+        return None
+
+    def release(self, ip: str) -> None:
+        if not self.max_concurrent:
+            return
+        active = self._inflight.get(ip)
+        if active is None:
+            return
+        if active <= 1:
+            self._inflight.pop(ip, None)
+        else:
+            self._inflight[ip] = active - 1
+
+
 class Metrics:
-    """Plain counter state feeding /healthz JSON and, later, /metrics."""
+    """Plain counter state feeding /healthz JSON and /metrics."""
 
     def __init__(self) -> None:
         self.counters: dict[str, int] = {
@@ -33,7 +82,7 @@ class Metrics:
     def uptime(self) -> float:
         return time.monotonic() - self.start_time
 
-    def observe_capture(self, capture: Any) -> None:
+    def observe_capture(self, capture: RequestCapture) -> None:
         self.counters["requests"] += 1
         self.body_bytes += capture.body_size
         analysis = capture.analysis
@@ -85,7 +134,7 @@ class Metrics:
         items = sorted(self.ip_totals.items(), key=lambda kv: kv[1], reverse=True)
         return [{"ip": ip, "requests": count} for ip, count in items[:limit]]
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> dict[str, object]:
         return {
             "started_at": self.started_at,
             "uptime_seconds": round(self.uptime(), 1),
@@ -99,17 +148,42 @@ class Metrics:
 
 
 class Sensor:
-    """Owns config-backed state: the store and shared metrics."""
+    """Owns config-backed state: the store, source guards and shared metrics."""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.log = None  # replaced by the logging setup in server.py
+        self.log = logging.getLogger("phptopwn.sensor")
         self.store = ArtifactStore(cfg)
         self.metrics = Metrics()
-        self.source = "built-in defaults"
+        self.guard = SourceGuard(cfg.limits.max_concurrent_per_ip, cfg.limits.rate_limit_per_minute)
+        self._tasks: list[asyncio.Task[None]] = []
 
     def open(self) -> None:
         self.store.open()
 
-    def shutdown(self) -> None:
-        return None
+    def start_maintenance(self) -> None:
+        self._tasks.append(asyncio.create_task(retention_loop(self.cfg)))
+
+    async def shutdown(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+
+async def retention_loop(cfg: Config) -> None:
+    """Periodically apply capture-dir and log-dir retention on a worker thread."""
+    while True:
+        await asyncio.sleep(cfg.retention.sweep_interval_seconds)
+        try:
+            stats = await asyncio.to_thread(
+                retention_sweep,
+                cfg.retention,
+                cfg.storage.capture_dir,
+                cfg.storage.log_dir,
+            )
+            if any(stats.values()):
+                LOG.info("retention sweep: %s", stats)
+        except Exception:  # retention must never take the sensor down
+            LOG.exception("retention sweep failed")

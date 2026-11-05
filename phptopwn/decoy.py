@@ -5,7 +5,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .capture import Analysis, RequestCapture
@@ -112,10 +112,6 @@ def create_app(cfg: Config, sensor: Sensor) -> FastAPI:
             content="User-agent: *\nDisallow: /uploads/\nDisallow: /admin/\n",
             media_type="text/plain",
         )
-
-    @app.api_route("/healthz", methods=["GET", "HEAD"])
-    async def healthz() -> JSONResponse:
-        return JSONResponse({"status": "ok"})
 
     @app.api_route(
         "/{full_path:path}",
