@@ -1,0 +1,42 @@
+services:
+  honeypot:
+    build: .
+    container_name: php2shell-honeypot
+    restart: unless-stopped
+    ports:
+      - "80:8080"
+      - "443:8443"
+    environment:
+      HONEYPOT_HTTP_PORT: "8080"
+      HONEYPOT_HTTPS_PORT: "8443"
+      HONEYPOT_TLS: "true"
+      HONEYPOT_LOG_DIR: "/app/logs"
+      HONEYPOT_PAYLOAD_DIR: "/app/captured_payloads"
+      HONEYPOT_TMP_DIR: "/tmp/honeypot"
+      HONEYPOT_LOG_ALL: "true"
+      HONEYPOT_TRUST_PROXY_HEADERS: "false"
+      HONEYPOT_MAX_BODY_BYTES: "33554432"
+      HONEYPOT_BODY_TIMEOUT_SECONDS: "30"
+    volumes:
+      - ./logs:/app/logs
+      - ./captured_payloads:/app/captured_payloads
+      - ./certs:/app/certs
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).status == 200 else 1)"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
