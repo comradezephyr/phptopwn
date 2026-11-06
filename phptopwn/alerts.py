@@ -51,11 +51,10 @@ class AlertHub:
             return
         self._inflight += 1
         try:
-            loop = asyncio.get_running_loop()
+            self._tracked(capture)
         except RuntimeError:  # pragma: no cover - defensive; callers are async
             self._inflight -= 1
             return
-        loop.create_task(self._tracked(capture))
 
     def _tracked(self, capture: RequestCapture) -> asyncio.Task[None]:
         task = asyncio.get_running_loop().create_task(self._deliver(capture))

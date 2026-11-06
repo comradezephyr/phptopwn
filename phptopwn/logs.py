@@ -13,7 +13,7 @@ class JsonFormatter(logging.Formatter):
         stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
         millis = f"{(record.created % 1) * 1000:03.0f}"
         payload: dict[str, str | float] = {
-            "timestamp": f"{stamp}.{millis}",
+            "timestamp": f"{stamp}.{millis}Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

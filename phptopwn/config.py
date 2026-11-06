@@ -189,7 +189,7 @@ def _build_section(name: str, cls: type, values: dict[str, Any], env: dict[str, 
             if not isinstance(raw, (str, bool, int, float)):
                 raise ConfigError(f"{label}: expected scalar value, got {type(raw).__name__}")
             kwargs[fname] = _coerce(raw, hint, label)
-    return cls(**kwargs)  # type: ignore[call-arg]
+    return cls(**kwargs)
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -293,12 +293,15 @@ def load_config(
     if path is not None:
         data = _read_toml(Path(path))
     sections = {}
+    unknown_tables = set(data) - set(_SECTION_TYPES)
+    if unknown_tables:
+        raise ConfigError(f"unknown config section(s): {', '.join(sorted(unknown_tables))}")
     for name, cls in _SECTION_TYPES.items():
         raw_section = data.get(name, {})
         if not isinstance(raw_section, dict):
             raise ConfigError(f"[{name}]: must be a table")
-        sections[name] = _build_section(name, cls, raw_section, env)  # type: ignore[arg-type]
-    cfg = Config(**sections)  # type: ignore[arg-type]
+        sections[name] = _build_section(name, cls, raw_section, env)
+    cfg = Config(**sections)
     if overrides:
         sensor = cfg.sensor
         if overrides.get("host") is not None:

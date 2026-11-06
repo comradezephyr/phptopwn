@@ -56,7 +56,7 @@ def create_app(cfg: Config, sensor: Sensor) -> FastAPI:
 
     def upload_response(request: Request) -> Response:
         capture = _capture(request)
-        analysis = capture.analysis if capture else Analysis()
+        analysis = (capture.analysis if capture else Analysis()) or Analysis()
 
         if "CVE-2026-109618" in analysis.cves:
             return _html_response(request, cfg, oom_page(decoy), status=500)

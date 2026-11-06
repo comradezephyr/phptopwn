@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import uvicorn
 
@@ -26,7 +27,7 @@ def setup_logging(cfg: Config) -> None:
     logging.getLogger("phptopwn").setLevel(cfg.logging.level.upper())
 
 
-def _uvicorn_config(app: object, cfg: Config, port: int, tls: bool = False) -> uvicorn.Config:
+def _uvicorn_config(app: Any, cfg: Config, port: int, tls: bool = False) -> uvicorn.Config:
     options: dict = {
         "host": cfg.sensor.host,
         "port": port,
@@ -69,13 +70,13 @@ async def serve_async(cfg: Config, sensor: Sensor) -> None:
     ]
 
     internal = uvicorn.Server(_uvicorn_config(internal_app, cfg, cfg.internal.metrics_port))
-    internal.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+    internal.install_signal_handlers = lambda: None  # type: ignore[attr-defined]
     servers.append(internal)
 
     if cfg.sensor.tls_enabled:
         tls_server = uvicorn.Server(_uvicorn_config(app, cfg, cfg.sensor.tls_port, tls=True))
         # Only the primary server owns signal handling; the others share it.
-        tls_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+        tls_server.install_signal_handlers = lambda: None  # type: ignore[attr-defined]
         servers.append(tls_server)
 
     sensor.start_maintenance()
