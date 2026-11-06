@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 phptopwn = "phptopwn.cli:main"
+phptopwn-collect = "phptopwn.collector_cli:main"
 
 [tool.setuptools]
 packages = ["phptopwn"]
