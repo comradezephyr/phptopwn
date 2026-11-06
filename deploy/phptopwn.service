@@ -1,0 +1,63 @@
+# systemd unit for the phptopwn honeypot sensor.
+#
+# Install as /etc/systemd/system/phptopwn.service, then:
+#   systemctl daemon-reload && systemctl enable --now phptopwn
+#
+# Configuration lives in /etc/phptopwn/phptopwn.toml plus the drop-in
+# environment file /etc/phptopwn/phptopwn.env (see deploy/phptopwn.env).
+
+[Unit]
+Description=PHP2Shell honeypot sensor (phptopwn)
+After=network-online.target
+Wants=network-online.target
+Documentation=https://github.com/phptopwn/phptopwn
+
+[Service]
+Type=simple
+User=phptopwn
+Group=phptopwn
+EnvironmentFile=-/etc/phptopwn/phptopwn.env
+ExecStart=/usr/local/bin/phptopwn --config /etc/phptopwn/phptopwn.toml
+WorkingDirectory=/var/lib/phptopwn
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+KillSignal=SIGINT
+LimitNOFILE=65536
+TasksMax=512
+
+# Filesystem isolation: everything outside these paths and /tmp is read-only
+# or invisible. ProtectSystem=strict pairs with ReadWritePaths below, which
+# must match the log/capture directories configured in the TOML and env file.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/phptopwn/logs /var/lib/phptopwn/payloads
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+# /var/lib/phptopwn/certs is read-only because the operator provisions the
+# certificate statically; the docker entrypoint generates throw-away ones.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
