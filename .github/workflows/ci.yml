@@ -25,5 +25,8 @@ jobs:
       - name: Type check (mypy)
         run: mypy phptopwn
 
-      - name: Tests with coverage gate
-        run: pytest --cov=phptopwn --cov-branch --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=85
+      - name: Tests
+        run: python -m coverage run --branch --source=phptopwn -m pytest
+
+      - name: Coverage gate
+        run: python -m coverage report --fail-under=85 -m

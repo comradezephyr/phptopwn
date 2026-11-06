@@ -516,14 +516,15 @@ guards, metrics, webhook metering, config validation, logging and the CLI:
 
 ```bash
 pip install ".[dev]"
-pytest                               # 124 tests
-pytest --cov --cov-report=term-missing --cov-fail-under=85
+python -m coverage run --branch --source=phptopwn -m pytest   # 124 tests
+python -m coverage report --fail-under=85 -m                  # gate
 ruff check phptopwn tests            # lint
 mypy phptopwn                        # types
 ```
 
 `.github/workflows/ci.yml` runs exactly these gates (ruff, mypy,
-`--cov-fail-under=85`) with Python 3.12 on every push and pull request.
+`coverage report --fail-under=85`) with Python 3.12 on every push and
+pull request.
 
 The test asserts:
 

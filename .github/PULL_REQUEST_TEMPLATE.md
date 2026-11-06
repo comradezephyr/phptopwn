@@ -11,7 +11,8 @@
 
 - [ ] `ruff check phptopwn tests` passes
 - [ ] `mypy phptopwn` passes
-- [ ] `pytest --cov --cov-fail-under=85` passes with no coverage regressions
+- [ ] `python -m coverage run --branch --source=phptopwn -m pytest` then
+      `python -m coverage report --fail-under=85` passes with no coverage regressions
 - [ ] `python3 tests/smoke_test.py` passes end to end
 - [ ] Docs updated when behaviour, config or metrics changed
       (README and/or docs/CONFIG.md, CHANGELOG under [Unreleased])
