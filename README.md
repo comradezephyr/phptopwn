@@ -229,6 +229,48 @@ the IOC blocklist.
 
 ---
 
+## Fleet: shipping events to a regional collector
+
+A sensor can forward every `phptopwn.event/1.0` record to one regional
+collector. Enable `[fleet]` in the sensor config (disabled by default):
+
+```toml
+[fleet]
+enabled = true
+node_id = "eu-lab-1"        # must be listed in the collector's [nodes] table
+region = "eu-west"
+collector_url = "https://collector-eu.example.net:9443"
+collector_token = "<same token as that collector>"
+```
+
+How it behaves under failure:
+
+* Events are appended to `fleet/outbox.jsonl` and shipped as NDJSON batches to
+  `POST {collector_url}/v1/events`. Progress is a byte offset in
+  `fleet/forwarder_state.json`, so an outage resumes oldest-first after the
+  collector returns.
+* If the collector stays down past `max_buffer_bytes`, the oldest backlog is
+  skipped (never re-shipped); the skip is counted in metrics
+  (`fleet_event_skips`) and logged. Sensor-side disk usage stays bounded.
+* The collector dedupes per `request_id` over `dedupe_days`, so a crash
+  between "shipped" and "offset advanced" is harmless.
+* The sensor's only outbound connection is `collector_url`. Firewall the host
+  accordingly (`docs/FLEET.md` has the lockdown recipe).
+
+The collector side is a separate process and package script:
+
+```bash
+phptopwn-collect serve --config collect.toml        # ingest + loopback dashboard
+phptopwn-collect ioc --day 20261106 --out exports/  # per-IP + payload-hash export
+```
+
+`docs/SCHEMA.md` documents the wire contract (validation, partial-accept
+report, dedupe); `docs/FLEET.md` is the deployment runbook with preflight
+gates and research-governance rules (freeze on code changes during a
+collection window, threshold-tuning log, no third-party egress from sensors).
+
+---
+
 ## Detection logic
 
 ### CVE-2026-109618 - OOM / mangled multipart

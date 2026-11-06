@@ -4,6 +4,34 @@ All notable changes to `phptopwn` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Fleet relay: sensor-side store-and-forward shipping of `phptopwn.event/1.0`
+  records to a regional collector (`[fleet]` config section, outbox ring
+  buffer with drop-oldest overflow, byte-offset resume across restarts,
+  worker thread, live counters). No sensor egress except the collector URL.
+- Regional collector (`phptopwn-collect serve`): NDJSON ingest at
+  `/v1/events` with per-line validation and partial-accept reporting,
+  constant-time bearer-token check, node allowlist (`[nodes]`, authoritative
+  region attribution), per-IP ingest rate limit, bounded dedupe window,
+  day-partitioned append-only raw store, hardening headers.
+- Daily IOC export (`phptopwn-collect ioc`): per-IP and payload-hash
+  aggregation per raw day, JSON + CSV artefacts with a SHA-256 manifest.
+- Fleet dashboard (loopback HTML pages): recent-day overview, region
+  composition, recent events; no external assets, no scripts.
+- `docs/SCHEMA.md` (event + ingest contract) and `docs/FLEET.md` (runbook,
+  egress lockdown, preflight gates, governance rules).
+
+### Changed
+
+- `SENSOR_VERSION` now follows `phptopwn.__version__` (event records carry
+  the running sensor version).
+- Coverage gate stays at 85%; fleet/collector/IOC/dashboard modules are
+  covered by new test suites (`tests/test_fleet.py`,
+  `tests/test_collector.py`).
+
 ## [1.0.0] - 2026-11-06
 
 First tagged release of the PHP2Shell honeypot sensor.

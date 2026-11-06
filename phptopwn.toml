@@ -68,3 +68,18 @@ metrics_port = 9091
 [logging]
 level = "INFO"
 json = true                          # one JSON object per operational log line
+
+# Fleet relay (optional): ship every event record to a regional collector.
+# See docs/FLEET.md before enabling; sensor egress is restricted to this URL.
+[fleet]
+enabled = false
+node_id = ""                         # e.g. "eu-lab-1"; must match the collector's [nodes]
+region = ""                          # e.g. "eu-west"
+collector_url = ""                   # e.g. "https://collector-eu.example.net:9443"
+collector_token = ""                 # >= 32 chars, no whitespace
+buffer_dir = "fleet"
+batch_max = 256                      # max events per POST (16..4096)
+batch_max_bytes = 4194304            # per-POST byte cap (64 KiB..16 MiB)
+flush_interval_seconds = 3.0
+timeout_seconds = 10.0
+max_buffer_bytes = 268435456         # ring cap; oldest backlog skipped beyond this
