@@ -73,8 +73,15 @@ interpreter. No request byte is ever executed.
 ├── docker-compose.yml
 ├── docker/
 │   └── entrypoint.sh            # optional self-signed TLS certificate bootstrap
+├── deploy/
+│   ├── phptopwn.service         # hardened systemd unit
+│   └── phptopwn.env             # systemd environment example
 ├── tests/
-│   └── smoke_test.py            # stdlib-only end-to-end verification
+│   ├── smoke_test.py            # stdlib-only end-to-end verification
+│   ├── conftest.py              # shared config/capture builders
+│   └── test_*.py                # unit suite: parsing, detection, storage, webhooks, metrics, ...
+├── docs/
+│   └── CONFIG.md                # full configuration reference
 ├── logs/                        # created at runtime (exploits.json, iocs.txt)
 └── captured_payloads/           # created at runtime (quarantined bytes)
 ```
@@ -159,6 +166,31 @@ uvicorn phptopwn.decoy:create_app --factory --host 0.0.0.0 --port 8080 --no-serv
 
 Note that running Uvicorn by hand skips the internal metrics listener.
 
+### systemd (bare metal / VM)
+
+`deploy/phptopwn.service` runs the sensor as a dedicated `phptopwn` user with
+a strict sandbox (`ProtectSystem=strict` + `ReadWritePaths` limited to the log
+and capture directories, `NoNewPrivileges`, `PrivateDevices`, empty
+`CapabilityBoundingSet`, `RestrictAddressFamilies` to IP/Unix, syscall
+filtering, `MemoryDenyWriteExecute`):
+
+```bash
+sudo useradd --system --home /var/lib/phptopwn --shell /usr/sbin/nologin phptopwn
+sudo mkdir -p /etc/phptopwn /var/lib/phptopwn/{logs,payloads}
+sudo chown -R phptopwn:phptopwn /var/lib/phptopwn
+sudo pip install --no-deps /path/to/phptopwn-1.0.0-py3-none-any.whl
+
+sudo cp deploy/phptopwn.service /etc/systemd/system/
+sudo cp deploy/phptopwn.env /etc/phptopwn/phptopwn.env   # then edit
+sudo systemctl daemon-reload
+sudo systemctl enable --now phptopwn
+journalctl -u phptopwn -f
+```
+
+Keep `PHPTOPWN_TLS=false` on systemd deployments unless you provision the
+certificate yourself — the unit deliberately does not generate keys (the
+Docker entrypoint does, for throw-away decoy certs only).
+
 ---
 
 ## Configuration
@@ -170,45 +202,26 @@ environment variable named `PHPTOPWN_<FIELD>` — e.g. `http_port` becomes
 `PHPTOPWN_TLS`, `log_all_requests` → `PHPTOPWN_LOG_ALL`, `logging.level` →
 `PHPTOPWN_LOG_LEVEL`, `logging.json` → `PHPTOPWN_LOG_JSON`). Precedence:
 built-in defaults < TOML file < environment < CLI flags (`--host`, `--port`).
-Select a different file with `--config` or `PHPTOPWN_CONFIG`. See
-`phptopwn.toml` for the full annotated list.
+Select a different file with `--config` or `PHPTOPWN_CONFIG`.
 
-| Variable | Default | Description |
+**`docs/CONFIG.md` is the complete reference** — every field, default,
+validation bound and the alert webhook payload. Unknown TOML sections, unknown
+fields and out-of-range values abort startup instead of being guessed around.
+
+Frequently adjusted at deployment:
+
+| Variable | Default | Effect |
 | --- | --- | --- |
-| `PHPTOPWN_HOST` | `0.0.0.0` | Bind address |
-| `PHPTOPWN_HTTP_PORT` | `8080` | Plain HTTP port |
-| `PHPTOPWN_TLS_PORT` | `8443` | TLS port |
-| `PHPTOPWN_TLS` | `false` | Enable the TLS listener |
-| `PHPTOPWN_CERT_FILE` | `certs/honeypot.crt` | TLS certificate (PEM) |
-| `PHPTOPWN_KEY_FILE` | `certs/honeypot.key` | TLS private key (PEM) |
-| `PHPTOPWN_LOG_DIR` | `logs` | Telemetry + IOC directory |
-| `PHPTOPWN_CAPTURE_DIR` | `captured_payloads` | Quarantine directory |
-| `PHPTOPWN_MAX_BODY_BYTES` | `33554432` (32 MiB) | Hard body capture cap |
-| `PHPTOPWN_PROBE_BYTES` | `2097152` (2 MiB) | Bytes kept in memory for analysis |
-| `PHPTOPWN_MAX_ARTIFACT_BYTES` | `4194304` (4 MiB) | Max bytes written per artifact |
-| `PHPTOPWN_MAX_ARTIFACT_PARTS` | `8` | Max uploaded parts quarantined per request |
-| `PHPTOPWN_LARGE_MULTIPART_BYTES` | `1048576` (1 MiB) | CVE-2026-109618 size threshold |
-| `PHPTOPWN_MANY_PARTS` | `32` | CVE-2026-109618 part-count threshold |
-| `PHPTOPWN_PART_HEADER_BYTES` | `4096` | Per-part header-size threshold |
-| `PHPTOPWN_HEADER_COUNT` | `60` | Request header-count signal threshold |
-| `PHPTOPWN_HEADER_BYTES` | `16384` | Request header-byte signal threshold |
-| `PHPTOPWN_SLOW_GAP_SECONDS` | `2.0` | TCP pause threshold (CVE-2026-109619) |
-| `PHPTOPWN_SLOW_TOTAL_SECONDS` | `5.0` | Slow body total-duration threshold |
-| `PHPTOPWN_BODY_TIMEOUT_SECONDS` | `30.0` | Per-chunk body read timeout |
-| `PHPTOPWN_LOG_ALL` | `true` | Log benign requests too |
-| `PHPTOPWN_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` for client IP |
-| `PHPTOPWN_SERVER_TOKEN` | `Apache/2.4.52 (Ubuntu)` | `Server` response header |
-| `PHPTOPWN_POWERED_BY` | `PHP/8.1.2` | `X-Powered-By` response header |
-| `PHPTOPWN_PHP_VERSION` | `8.1.2` | Version shown on decoy pages |
-| `PHPTOPWN_MEMORY_LIMIT` | `128M` | Value shown by the phpinfo decoy |
-| `PHPTOPWN_SERVER_NAME` | `intranet.acme.local` | Hostname on error pages |
-| `PHPTOPWN_LOG_LEVEL` | `INFO` | Python logging level |
-| `PHPTOPWN_LOG_JSON` | `true` | Emit one JSON object per operational log line |
-| `PHPTOPWN_METRICS_HOST` | `127.0.0.1` | Internal listener bind (`/healthz`, `/metrics`) |
-| `PHPTOPWN_METRICS_PORT` | `9091` | Internal listener port |
-| `PHPTOPWN_WEBHOOK_URL` | *(empty)* | Webhook to POST exploit alerts to |
-| `PHPTOPWN_MIN_SEVERITY` | `high` | Lowest analysis severity that raises an alert |
-| `PHPTOPWN_COOLDOWN_SECONDS` | `60.0` | Minimum spacing between alerts per source IP |
+| `PHPTOPWN_LOG_ALL` | `true` | Log benign requests too (`false` keeps only exploits) |
+| `PHPTOPWN_WEBHOOK_URL` | *(empty)* | Enable Post-JSON exploit alerting |
+| `PHPTOPWN_MIN_SEVERITY` | `high` | Lowest severity that raises an alert |
+| `PHPTOPWN_RATE_LIMIT_PER_MINUTE` | `600` | Source guard, requests/minute/IP (`0` disables) |
+| `PHPTOPWN_MAX_CONCURRENT_PER_IP` | `32` | Source guard, concurrent requests/IP (`0` disables) |
+| `PHPTOPWN_MAX_BODY_BYTES` | `33554432` | Hard body capture cap |
+| `PHPTOPWN_BODY_TIMEOUT_SECONDS` | `30.0` | Body-stall read timeout → `408` |
+| `PHPTOPWN_LOG_DIR` / `PHPTOPWN_CAPTURE_DIR` | `logs` / `captured_payloads` | Telemetry + quarantine locations |
+| `PHPTOPWN_METRICS_HOST` | `127.0.0.1` | Set `0.0.0.0` in container deployments |
+| `PHPTOPWN_TRUST_PROXY_HEADERS` | `false` | Trust `X-Forwarded-For` (proxy only!) |
 
 Do **not** enable `PHPTOPWN_TRUST_PROXY_HEADERS` unless the sensor is behind a
 trusted reverse proxy; otherwise attackers can spoof their source IP in logs and
@@ -296,7 +309,7 @@ Abridged example:
 
 ```json
 {
-  "schema": "php2shell-honeypot.event/1.0",
+  "schema": "phptopwn.event/1.0",
   "event": "http_request",
   "request_id": "f2f3de9e630e4562b156f9ea56b86dec",
   "timestamp": "2026-10-23T15:56:47.596Z",
@@ -343,7 +356,7 @@ Abridged example:
     "webshell_markers": ["<?php", "system("],
     "iocs": {"ip": ["127.0.0.1", "203.0.113.9"], "url": ["http://203.0.113.9/x.sh"], "filename": ["shell.php"], "sha256": ["de631871..."]}
   },
-  "artifacts": [{"file": "de631871....php", "kind": "uploaded_file", "sha256": "de631871....", "bytes": 68}],
+  "artifacts": [{"file": "de631871....bin", "kind": "uploaded_file", "sha256": "de631871....", "bytes": 68, "original_filename": "shell.php"}],
   "response": {"status": 200, "headers": {"server": "Apache/2.4.52 (Ubuntu)", "x-powered-by": "PHP/8.1.2"}},
   "error": null
 }
@@ -356,8 +369,13 @@ fields, signal evidence, command strings, IOCs, response status and artifacts.
 ### `captured_payloads/`
 
 * `<sha256>.<ext>` - raw request bodies (`*.multipart`, `*.form`, `*.body`) and
-  uploaded files/fragments. `.php` is used for PHP-looking uploads; the file is
-  inert bytes and is never served.
+  uploaded files/fragments. Executable-looking uploads are quarantined with a
+  **neutralized `.bin` extension** (`PHPTOPWN_NEUTRALIZE_CAPTURE_NAMES=true`,
+  the default) so nothing in the directory can ever be routed to a script
+  interpreter; the original filename is preserved in the record and the
+  manifest. Setting it `false` restores `.<orig-ext>` names — do this only for
+  a downstream tool that needs them, and make sure the directory is opaque to
+  any interpreter.
 * `manifest.jsonl` - one JSON object per artifact: `sha256`, `file`, `kind`,
   `size`, `original_filename`, `content_type`, `truncated`, `first_seen`,
   `request_id`, `source_ip`.
@@ -417,8 +435,60 @@ jq -r '.client.ip' logs/exploits.json | sort | uniq -c | sort -nr | head
 | `/server-status` | GET | Apache `mod_status` decoy |
 | `/wp-login.php` | GET, POST | WordPress login decoy / invalid-credentials page |
 | `/robots.txt` | GET | Discourages `/uploads/` and `/admin/` |
-| `/healthz` | GET | Container health probe (`{"status": "ok"}`) |
 | any other path | any method | Apache-style `404`; `OPTIONS` returns an `Allow` header |
+
+> `/healthz` on the decoy surface is deliberately `404` — an Apache server
+> would not expose an ops route. The real health endpoint lives on the
+> internal listener (see below); Docker's healthcheck uses it.
+
+---
+
+## Internal listener: health and Prometheus metrics
+
+A second uvicorn app listens on `metrics_host:metrics_port` (default
+`127.0.0.1:9091`) and serves:
+
+* `GET /healthz` → `{"status": "ok", "version": ...,
+  "counters": {...}, "uptime_seconds": ...}` (used by the container
+  healthcheck)
+* `GET /metrics` → Prometheus text exposition (`text/plain; version=1.0.0`)
+
+Metric families:
+
+| Family | Meaning |
+| --- | --- |
+| `phptopwn_uptime_seconds` | Process uptime |
+| `phptopwn_requests{kind}` | `benign` / `exploit` request counts |
+| `phptopwn_guard_rejections{reason}` | `rate_limited`, `concurrent_limit`, `header_flood` |
+| `phptopwn_signature_hits{signature}` | Most frequent detection signals (capped top set) |
+| `phptopwn_alerts{outcome}` | `sent`, `failed`, `metered`, `overflow` |
+| `phptopwn_body_bytes` | Bytes observed by the bounded reader |
+| `phptopwn_request_rate_per_minute` | Recent observed request rate |
+| `phptopwn_top_client{ip}` | Top-10 talkers |
+| `phptopwn_last_exploit_at_seconds` | Unix time of the last exploit verdict |
+
+Scrape it from localhost, over the Docker network, or publish
+`127.0.0.1:9091:9091` as compose does by default.
+
+---
+
+## Alerting to webhooks
+
+Set `PHPTOPWN_WEBHOOK_URL` and every exploit at or above
+`PHPTOPWN_MIN_SEVERITY` POSTs one JSON object to it (sensor, request id,
+client IP, severity, CVEs, signal ids and IOC summary). Deliveries run as
+tracked background tasks — a dead webhook never slows or stalls request
+processing. Accounting lands in `phptopwn_alerts{outcome}`:
+
+* `sent` — webhook answered 2xx
+* `failed` — non-2xx or transport error (logged at WARNING with request id)
+* `metered` — suppressed inside the per-IP cooldown window; the window opens
+  only when an alert actually dispatches, so an ongoing attack alerts once per
+  cooldown period instead of refreshing it forever
+* `overflow` — dropped because `PHPTOPWN_MAX_INFLIGHT` deliveries were already
+  running
+
+Payload shape and per-field semantics: `docs/CONFIG.md`.
 
 ---
 
@@ -435,8 +505,25 @@ Expected output:
 ```text
 PASS: decoy routes, Apache/PHP headers, CVE-2026-109618, CVE-2026-109619,
       paused TCP stream detection, stalled-upload timeout, payload quarantine,
-      SHA-256 manifest, IOC blocklist and TLS listener all verified.
+      SHA-256 manifest, IOC blocklist, JSON logs, Prometheus metrics,
+      webhook alerting and TLS listener all verified.
 ```
+
+### Unit suite and coverage gate (CI)
+
+124 unit tests cover parsing, detection thresholds, storage/quarantine,
+guards, metrics, webhook metering, config validation, logging and the CLI:
+
+```bash
+pip install ".[dev]"
+pytest                               # 124 tests
+pytest --cov --cov-report=term-missing --cov-fail-under=85
+ruff check phptopwn tests            # lint
+mypy phptopwn                        # types
+```
+
+`.github/workflows/ci.yml` runs exactly these gates (ruff, mypy,
+`--cov-fail-under=85`) with Python 3.12 on every push and pull request.
 
 The test asserts:
 
@@ -452,6 +539,11 @@ The test asserts:
 6. Quarantined files are named by SHA-256 and match the original bytes; the
    manifest and IOC feed contain the hashes and attacker IP.
 7. The TLS listener serves the same Apache-fingerprinted decoy over HTTPS.
+8. Operational logs are single-line JSON objects with GMT `Z` stamps.
+9. `/metrics` exposes all documented `phptopwn_*` families and `/healthz`
+   answers `{"status":"ok"}` on the internal port.
+10. A local webhook sink receives a CVE-labelled JSON alert, and a second hit
+    inside the cooldown window is metered, not re-sent.
 
 Manual exploit simulation (safe - the payload is only stored and scored):
 
