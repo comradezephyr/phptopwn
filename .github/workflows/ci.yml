@@ -26,4 +26,4 @@ jobs:
         run: mypy phptopwn
 
       - name: Tests with coverage gate
-        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+        run: pytest --cov=phptopwn --cov-branch --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=85
