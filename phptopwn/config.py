@@ -8,6 +8,7 @@ current working directory.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -102,6 +103,23 @@ class InternalConfig:
 
 
 @dataclass(frozen=True)
+class FleetConfig:
+    """Central forwarder: ship events to the regional collector, buffer on outage."""
+
+    enabled: bool = False
+    node_id: str = ""
+    region: str = ""
+    collector_url: str = ""
+    collector_token: str = ""
+    buffer_dir: Path = field(default_factory=lambda: Path("fleet"))
+    batch_max: int = 256
+    batch_max_bytes: int = 4 * 1024 * 1024
+    flush_interval_seconds: float = 3.0
+    timeout_seconds: float = 10.0
+    max_buffer_bytes: int = 256 * 1024 * 1024
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
     json: bool = True
@@ -117,6 +135,7 @@ class Config:
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     decoy: DecoyConfig = field(default_factory=DecoyConfig)
     internal: InternalConfig = field(default_factory=InternalConfig)
+    fleet: FleetConfig = field(default_factory=FleetConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
@@ -129,6 +148,7 @@ _SECTION_TYPES = {
     "alerts": AlertsConfig,
     "decoy": DecoyConfig,
     "internal": InternalConfig,
+    "fleet": FleetConfig,
     "logging": LoggingConfig,
 }
 
@@ -274,6 +294,33 @@ def _validate(cfg: Config) -> None:
         raise ConfigError("retention: max_log_archives must be >= 0")
     if r.sweep_interval_seconds < 5:
         raise ConfigError("retention: sweep_interval_seconds must be at least 5")
+    f = cfg.fleet
+    if f.enabled:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", f.node_id):
+            raise ConfigError("fleet: node_id must be 1-64 chars of [a-z0-9-]")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", f.region):
+            raise ConfigError("fleet: region must be 1-64 chars of [a-z0-9-]")
+        url = f.collector_url[:-1] if f.collector_url.endswith("/") else f.collector_url
+        allowed_insecure = "http://localhost" in url or "http://127.0.0.1" in url
+        if not (url.startswith("https://") or allowed_insecure):
+            raise ConfigError(
+                "fleet: collector_url must be an https:// URL "
+                "(http:// only to loopback hosts for lab testing)"
+            )
+        if len(f.collector_token) < 32 or any(ch.isspace() for ch in f.collector_token):
+            raise ConfigError("fleet: collector_token must be at least 32 chars without whitespace")
+        if f.buffer_dir == cfg.storage.log_dir:
+            raise ConfigError("fleet: buffer_dir must not be the log_dir")
+        if not 16 <= f.batch_max <= 4096:
+            raise ConfigError("fleet: batch_max must be between 16 and 4096")
+        if not 65536 <= f.batch_max_bytes <= 16 * 1024 * 1024:
+            raise ConfigError("fleet: batch_max_bytes must be between 64 KiB and 16 MiB")
+        if not 0.5 <= f.flush_interval_seconds <= 600:
+            raise ConfigError("fleet: flush_interval_seconds must be between 0.5 and 600")
+        if not 1.0 <= f.timeout_seconds <= 120:
+            raise ConfigError("fleet: timeout_seconds must be between 1 and 120")
+        if f.max_buffer_bytes < 4 * f.batch_max_bytes:
+            raise ConfigError("fleet: max_buffer_bytes must be at least 4x batch_max_bytes")
 
 
 def load_config(
@@ -334,6 +381,13 @@ def dry_run_report(cfg: Config, source: str) -> str:
         f" logs rotate at {cfg.retention.max_log_bytes} B",
         f"decoy:         {cfg.decoy.server_token} ({cfg.decoy.php_version}) at {cfg.decoy.server_name}",
     ]
+    if cfg.fleet.enabled:
+        lines.append(
+            f"fleet:         -> {cfg.fleet.collector_url}"
+            f" (node {cfg.fleet.node_id}, region {cfg.fleet.region})"
+        )
+    else:
+        lines.append("fleet:         disabled")
     if s.tls_enabled and not (s.cert_file.exists() and s.key_file.exists()):
         lines.append(f"warning: tls enabled but {s.cert_file} / {s.key_file} not found")
     return "\n".join(lines)

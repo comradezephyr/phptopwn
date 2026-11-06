@@ -9,6 +9,7 @@ from collections import OrderedDict, deque
 from .alerts import AlertHub
 from .capture import RequestCapture
 from .config import Config
+from .fleet import FleetForwarder
 from .storage import ArtifactStore, retention_sweep, utc_now
 
 LOG = logging.getLogger("phptopwn.sensor")
@@ -75,6 +76,9 @@ class Metrics:
             "alerts_failed": 0,
             "alerts_metered": 0,
             "alerts_overflow": 0,
+            "fleet_events_shipped": 0,
+            "fleet_bytes_shipped": 0,
+            "fleet_event_skips": 0,
         }
         self.signatures: dict[str, int] = {}
         self.ip_totals: OrderedDict[str, int] = OrderedDict()
@@ -162,13 +166,20 @@ class Sensor:
         self.metrics = Metrics()
         self.guard = SourceGuard(cfg.limits.max_concurrent_per_ip, cfg.limits.rate_limit_per_minute)
         self.alerts = AlertHub(cfg, self.metrics)
+        self.fleet: FleetForwarder | None = None
+        if cfg.fleet.enabled:
+            self.fleet = FleetForwarder(cfg, self.metrics)
         self._tasks: list[asyncio.Task[None]] = []
 
     def open(self) -> None:
         self.store.open()
+        if self.fleet is not None:
+            self.store.set_event_sink(self.fleet.sink.write)
 
     def start_maintenance(self) -> None:
         self._tasks.append(asyncio.create_task(retention_loop(self.cfg)))
+        if self.fleet is not None:
+            self.fleet.start()
 
     async def shutdown(self) -> None:
         for task in self._tasks:
@@ -177,6 +188,8 @@ class Sensor:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.alerts.close()
+        if self.fleet is not None:
+            self.fleet.stop()
 
 
 async def retention_loop(cfg: Config) -> None:

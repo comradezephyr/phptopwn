@@ -12,16 +12,18 @@ import os
 import re
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from . import __version__
 from .capture import Analysis, MultipartPart, RequestCapture
 from .config import Config, RetentionConfig
 from .parsing import find_webshell_markers, parse_content_type
 
-SENSOR_VERSION = "1.0.0"
+SENSOR_VERSION = __version__
 CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _IOC_CAPACITY = 200_000
 
@@ -179,6 +181,11 @@ class ArtifactStore:
         self._opened = False
         self._seen_files: set[str] = set()
         self._ioc_keys: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._event_sink: Callable[[dict[str, Any]], None] | None = None
+
+    def set_event_sink(self, sink: Callable[[dict[str, Any]], Any]) -> None:
+        """Register a fleet outbox sink; called once at sensor startup."""
+        self._event_sink = sink
 
     def open(self) -> None:
         if self._opened:
@@ -237,6 +244,16 @@ class ArtifactStore:
         if analysis.is_exploit or self.cfg.detection.log_all_requests:
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+        if self._event_sink is not None:
+            try:
+                self._event_sink(record)
+            except Exception:  # fleet outbox must never break the response path
+                import logging
+
+                logging.getLogger("phptopwn.storage").exception(
+                    "fleet outbox write failed for %s", capture.request_id
+                )
 
         if analysis.is_exploit:
             self._update_iocs(capture, analysis)
