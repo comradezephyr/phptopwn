@@ -37,6 +37,7 @@ node_id = "eu-lab-1"                 # must appear in the collector's [nodes]
 region = "eu-west"
 collector_url = "https://collector-eu.example.net:9443"
 collector_token = "<shared with that collector>"
+allow_insecure_http = false          # opt-in: plain http:// collector behind an isolated internal network
 buffer_dir = "fleet"
 batch_max = 256                      # max events per POST
 batch_max_bytes = 4194304            # ≤ 16 MiB

@@ -231,6 +231,8 @@ class RequestCapture:
     declared_content_length: int | None
     transfer_encoding: str
     body: BodySpool
+    peer_ip: str = ""
+    peer_port: int | None = None
     chunk_count: int = 0
     chunk_gaps: list[float] = field(default_factory=list)
     first_byte_seconds: float = 0.0

@@ -159,6 +159,9 @@ def validate_event(line: str) -> tuple[dict[str, Any] | None, str | None]:
     ip = client.get("ip")
     if not isinstance(ip, str) or not 1 <= len(ip) <= 64:
         return None, "invalid_shape:client.ip"
+    peer_ip = client.get("peer_ip")
+    if peer_ip is not None and (not isinstance(peer_ip, str) or not 1 <= len(peer_ip) <= 64):
+        return None, "invalid_shape:client.peer_ip"
     request = record.get("request")
     if not isinstance(request, dict):
         return None, "invalid_shape:request"

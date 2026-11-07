@@ -48,6 +48,32 @@ def test_cli_overrides_beat_env():
     assert cfg.sensor.host == "127.0.0.1"
 
 
+def test_fleet_insecure_http_requires_explicit_optin(tmp_path):
+    base = (
+        '[fleet]\nenabled = true\nnode_id = "lab-1"\nregion = "eu-test"\n'
+        f'collector_token = "{"t" * 40}"\n'
+    )
+    plain = tmp_path / "plain.toml"
+    plain.write_text(base + 'collector_url = "http://collector-fleet:9443"\n')
+    with pytest.raises(ConfigError):
+        load_config(plain, environ={})
+    explicit = tmp_path / "optin.toml"
+    explicit.write_text(base + 'collector_url = "http://collector-fleet:9443"\nallow_insecure_http = true\n')
+    cfg = load_config(explicit, environ={})
+    assert cfg.fleet.allow_insecure_http is True
+
+
+def test_client_ip_header_must_be_a_single_header_name(tmp_path):
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[sensor]\nclient_ip_header = "Bad Header: X"\n')
+    with pytest.raises(ConfigError, match="client_ip_header"):
+        load_config(bad, environ={})
+    good = tmp_path / "good.toml"
+    good.write_text('[sensor]\nclient_ip_header = "CF-Connecting-IP"\n')
+    cfg = load_config(good, environ={})
+    assert cfg.sensor.client_ip_header == "CF-Connecting-IP"
+
+
 def test_env_renames_plus_field_rule(tmp_path):
     (tmp_path / "custom.toml").write_text(
         '[logging]\nlevel = "INFO"\njson = true\n',

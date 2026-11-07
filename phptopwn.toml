@@ -12,6 +12,7 @@ tls_enabled = false
 cert_file = "certs/honeypot.crt"
 key_file = "certs/honeypot.key"
 trust_proxy_headers = false          # only behind a proxy that overwrites X-Forwarded-For
+client_ip_header = ""                # e.g. "CF-Connecting-IP" behind a tunnel; sets client.ip, raw peer kept in client.peer_ip
 
 [storage]
 log_dir = "logs"
@@ -77,6 +78,7 @@ node_id = ""                         # e.g. "eu-lab-1"; must match the collector
 region = ""                          # e.g. "eu-west"
 collector_url = ""                   # e.g. "https://collector-eu.example.net:9443"
 collector_token = ""                 # >= 32 chars, no whitespace
+allow_insecure_http = false          # opt-in: plain http:// to an isolated internal network (laptop compose does this)
 buffer_dir = "fleet"
 batch_max = 256                      # max events per POST (16..4096)
 batch_max_bytes = 4194304            # per-POST byte cap (64 KiB..16 MiB)

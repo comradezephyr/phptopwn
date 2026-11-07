@@ -29,6 +29,7 @@ The `[sensor]` block selects the listener and decoy identity:
 | `cert_file` | `PHPTOPWN_CERT_FILE` | `certs/honeypot.crt` | PEM; must exist when TLS is on (`MissingCertificate` otherwise) |
 | `key_file` | `PHPTOPWN_KEY_FILE` | `certs/honeypot.key` | PEM private key; must exist when TLS is on |
 | `trust_proxy_headers` | `PHPTOPWN_TRUST_PROXY_HEADERS` | `false` | Only behind a proxy that overwrites `X-Forwarded-For`; attackers spoof it otherwise |
+| `client_ip_header` | `PHPTOPWN_CLIENT_IP_HEADER` | `""` | Header whose value becomes the effective `client.ip` (e.g. `CF-Connecting-IP` behind a Cloudflare tunnel); raw TCP peer always kept in `client.peer_ip`. Only enable when all traffic arrives via the edge that writes the header |
 
 Select an alternate file with `--config PATH` or
 `PHPTOPWN_CONFIG=/path/to/phptopwn.toml`.

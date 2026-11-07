@@ -26,6 +26,14 @@ def peer_ip(scope: Scope) -> str:
     return str(client[0]) if client else "0.0.0.0"
 
 
+def client_ip_header_token(value: str) -> str | None:
+    """Validate a configured client-IP header name, e.g. ``CF-Connecting-IP``."""
+    header = value.strip()
+    if not header or any(ch.isspace() for ch in header) or ":" in header:
+        return None
+    return header
+
+
 def headers_overflow(scope: Scope, limits: Any) -> bool:
     headers = scope.get("headers", [])
     if len(headers) > limits.max_request_headers:
@@ -40,21 +48,58 @@ class TelemetryMiddleware:
         self.cfg = cfg
         self.sensor = sensor
 
+    def resolve_identity(
+        self, scope: Scope
+    ) -> tuple[str, str, int | None, dict[str, str]]:
+        """Resolve the effective and raw client identity from a request scope.
+
+        Effective ip is the real attack source: the configured header
+        (``CF-Connecting-IP`` behind a Cloudflare tunnel, X-Forwarded-For
+        behind a trusted proxy) or the raw TCP peer when no proxy header is
+        trusted. The raw TCP peer is always returned separately so records
+        keep both.
+        """
+        client = scope.get("client") or ("0.0.0.0", 0)
+        raw_ip = str(client[0]) if client else "0.0.0.0"
+        raw_port = client[1] if len(client) > 1 else None
+        header_map = {}
+        for name, value in scope.get("headers", []):
+            key = (
+                name.decode("latin-1", "replace").lower()
+                if isinstance(name, bytes)
+                else str(name).lower()
+            )
+            header_map[key] = (
+                value.decode("latin-1", "replace")
+                if isinstance(value, bytes)
+                else str(value)
+            )
+        effective = raw_ip
+        header_name = client_ip_header_token(self.cfg.sensor.client_ip_header)
+        if header_name and header_map.get(header_name.lower(), "").strip():
+            effective = header_map[header_name.lower()].split(",")[0].strip()[:64]
+        elif self.cfg.sensor.trust_proxy_headers:
+            forwarded = header_map.get("x-forwarded-for", "")
+            if forwarded:
+                effective = forwarded.split(",")[0].strip()[:64]
+        return effective, raw_ip, raw_port, header_map
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        ip = peer_ip(scope)
+        ip, raw_ip, raw_port, _header_map = self.resolve_identity(scope)
+        scope["phptopwn.identity"] = (ip, raw_ip, raw_port)
         reason = self.sensor.guard.acquire(ip)
         if reason:
+            # acquire() did not increment the inflight counter on a reject,
+            # so there is nothing to release for this request.
             await self._reject(scope, send, ip, reason)
-            self.sensor.guard.release(ip)
             return
 
         if headers_overflow(scope, self.cfg.limits):
             await self._reject(scope, send, ip, "header_flood")
-            self.sensor.guard.release(ip)
             return
 
         try:
@@ -110,12 +155,17 @@ class TelemetryMiddleware:
                         )
                     except Exception:
                         LOG.debug("client disconnected before the 500 response", exc_info=True)
-            finally:
-                self.sensor.metrics.observe_capture(capture)
-                await self.sensor.store.persist(capture)
-                self.sensor.alerts.maybe_dispatch(capture)
         finally:
+            # The response has been delivered; free the source slot now. The
+            # telemetry below still runs, but must not keep the per-IP
+            # concurrency counter hostage behind the serialized store writes.
             self.sensor.guard.release(ip)
+
+        # Post-delivery telemetry: the client already has its response, so a
+        # slow store write delays nothing on the request path.
+        self.sensor.metrics.observe_capture(capture)
+        await self.sensor.store.persist(capture)
+        self.sensor.alerts.maybe_dispatch(capture)
 
     async def _reject(self, scope: Scope, send: Send, ip: str, reason: str) -> None:
         """Refuse abusive requests without draining the body."""
@@ -162,6 +212,8 @@ class TelemetryMiddleware:
             http_version=scope.get("http_version", "1.1"),
             client_ip=ip,
             client_port=client[1] if len(client) > 1 else None,
+            peer_ip=str(client[0]) if client else "0.0.0.0",
+            peer_port=client[1] if len(client) > 1 else None,
             headers=headers_raw,
             header_map={},
             header_count=0,
@@ -198,6 +250,7 @@ class TelemetryMiddleware:
 
     async def _read_request(self, scope: Scope, receive: Receive) -> RequestCapture:
         cfg = self.cfg
+        effective_ip, raw_ip, raw_port, _scoped_map = self.resolve_identity(scope)
         headers_raw = [
             (name.decode("latin-1", "replace"), value.decode("latin-1", "replace"))
             for name, value in scope.get("headers", [])
@@ -207,7 +260,10 @@ class TelemetryMiddleware:
         header_bytes = 0
         for name, value in headers_raw:
             key = name.lower()
-            header_map[key] = f"{header_map[key]}, {value}" if key in header_map else value
+            if key in counts:
+                header_map[key] = f"{header_map[key]}, {value}"
+            else:
+                header_map[key] = value
             counts[key] = counts.get(key, 0) + 1
             header_bytes += len(name) + len(value) + 4
         duplicate_headers = sum(max(0, count - 1) for count in counts.values())
@@ -216,14 +272,6 @@ class TelemetryMiddleware:
         raw_length = header_map.get("content-length", "").strip()
         if raw_length.isdigit():
             declared = int(raw_length)
-
-        client = scope.get("client") or ("0.0.0.0", 0)
-        client_ip = str(client[0]) if client else "0.0.0.0"
-        client_port = client[1] if len(client) > 1 else None
-        if cfg.sensor.trust_proxy_headers:
-            forwarded = header_map.get("x-forwarded-for", "")
-            if forwarded:
-                client_ip = forwarded.split(",")[0].strip()[:64]
 
         raw_path = scope.get("raw_path") or b""
         if isinstance(raw_path, bytes):
@@ -242,8 +290,10 @@ class TelemetryMiddleware:
             raw_path=raw_path_text[:2048],
             query=scope.get("query_string", b"").decode("latin-1", "replace")[:8192],
             http_version=scope.get("http_version", "1.1"),
-            client_ip=client_ip,
-            client_port=client_port,
+            client_ip=effective_ip,
+            client_port=raw_port,
+            peer_ip=raw_ip,
+            peer_port=raw_port,
             headers=headers_raw,
             header_map=header_map,
             header_count=len(headers_raw),

@@ -99,6 +99,8 @@ def build_record(capture: RequestCapture, cfg: Config) -> dict[str, Any]:
         "client": {
             "ip": capture.client_ip,
             "port": capture.client_port,
+            "peer_ip": capture.peer_ip,
+            "peer_port": capture.peer_port,
         },
         "request": {
             "method": clean_text(capture.method, 16),

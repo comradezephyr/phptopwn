@@ -22,7 +22,12 @@ One JSON object per line (`logs/exploits.json`, and the fleet outbox when
     "server_token": "Apache/2.4.52 (Ubuntu)",
     "powered_by": "PHP/8.1.2"
   },
-  "client": { "ip": "203.0.113.7", "port": 51344 },
+  "client": {
+    "ip": "203.0.113.7",               // effective source IP (see below)
+    "port": 51344,                     // raw TCP peer port
+    "peer_ip": "172.18.0.9",           // raw TCP peer address (always present)
+    "peer_port": 51344
+  },
   "request": {
     "method": "POST", "scheme": "http", "host": "...", "path": "/upload.php",
     "raw_path": "...", "query": "...", "http_version": "1.1",
@@ -56,7 +61,29 @@ One JSON object per line (`logs/exploits.json`, and the fleet outbox when
 Only identity fields are contractually validated at the collector:
 `schema`, `event`, `request_id` (1–128 chars of `[A-Za-z0-9._:-]`),
 `timestamp` (RFC 3339), `client.ip`, `request.method`, `request.path`.
+`client.peer_ip` is validated when present (string, 1–64 chars).
 Everything else carries through verbatim.
+
+## Client identity behind a tunnel
+
+When the sensor is reached only through a Cloudflare tunnel, the raw TCP peer
+is the `cloudflared` connector on the laptop — every client would otherwise
+share one source name. Sensor configuration (`[sensor] client_ip_header`,
+set to `CF-Connecting-IP` in the laptop compose stack) promotes that header's
+first value to the effective `client.ip`, falling back to the raw peer when
+the header is absent. The raw TCP peer is always kept untouched in
+`client.peer_ip` / `client.peer_port`, so records preserve both identities:
+
+- `client.ip` — the real attack source as seen by the Cloudflare edge.
+- `client.peer_ip` — the tunnel connector (or, without `client_ip_header`,
+  the direct peer).
+
+Rate limiting and per-IP concurrency caps key on the effective `client.ip`,
+which is correct because `CF-Connecting-IP` is written by the Cloudflare edge
+and cannot be spoofed by a caller passing through it. Only set
+`client_ip_header` when *all* traffic reaches the sensor through the tunnel —
+a direct attacker able to reach the listener could otherwise forge the header
+and rotate their apparent identity.
 
 ## Collector enrichment
 

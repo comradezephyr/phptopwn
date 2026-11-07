@@ -27,6 +27,83 @@ def harness(tmp_path):
     return build
 
 
+def _latest_record(store: ArtifactStore) -> dict:
+    lines = store.log_path.read_text(encoding="utf-8").strip().splitlines()
+    return json.loads(lines[-1])
+
+
+def test_tunnel_client_ip_resolution(harness):
+    client, _, _, store = harness(
+        client_ip_header="CF-Connecting-IP", header_count=33, header_bytes=16384
+    )
+    ok = client.post(
+        "/upload.php",
+        data=b"name=quarterly-report&note=benign",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "CF-Connecting-IP": "198.51.100.9",
+            "X-Forwarded-For": "10.0.0.99",
+        },
+    )
+    assert ok.status_code == 200
+    record = _latest_record(store)
+    assert record["client"]["ip"] == "198.51.100.9"  # CF header wins over XFF
+    assert record["client"]["peer_ip"] == "testclient"
+    assert record["client"]["peer_ip"] != record["client"]["ip"]
+
+
+def test_tunnel_without_header_falls_back_to_raw_peer(harness):
+    client, _, _, store = harness(
+        client_ip_header="CF-Connecting-IP", header_count=33, header_bytes=16384
+    )
+    ok = client.post(
+        "/upload.php",
+        data=b"name=note&note=benign",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert ok.status_code == 200
+    record = _latest_record(store)
+    assert record["client"]["ip"] == "testclient"
+    assert record["client"]["peer_ip"] == "testclient"
+
+
+def test_guard_uses_effective_ip_not_tunnel_peer(harness):
+    client, _, _, _ = harness(
+        client_ip_header="CF-Connecting-IP",
+        rate_limit_per_minute=1,
+        header_count=33,
+        header_bytes=16384,
+    )
+    for ip in ("198.51.100.9", "198.51.100.10"):
+        ok = client.post(
+            "/upload.php",
+            data=b"a=1&note=benign",
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "CF-Connecting-IP": ip,
+            },
+        )
+        assert ok.status_code == 200
+    third = client.post(
+        "/upload.php",
+        data=b"a=2&note=benign",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "CF-Connecting-IP": "198.51.100.9",
+        },
+    )
+    assert third.status_code == 403
+    distinct = client.post(
+        "/upload.php",
+        data=b"a=3&note=benign",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "CF-Connecting-IP": "198.51.100.11",
+        },
+    )
+    assert distinct.status_code == 200
+
+
 def test_decoy_index_fingerprints(harness):
     client, _, _, _ = harness()
     response = client.get("/")

@@ -34,6 +34,7 @@ class SensorConfig:
     cert_file: Path = field(default_factory=lambda: Path("certs/honeypot.crt"))
     key_file: Path = field(default_factory=lambda: Path("certs/honeypot.key"))
     trust_proxy_headers: bool = False
+    client_ip_header: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ class FleetConfig:
     flush_interval_seconds: float = 3.0
     timeout_seconds: float = 10.0
     max_buffer_bytes: int = 256 * 1024 * 1024
+    allow_insecure_http: bool = False
 
 
 @dataclass(frozen=True)
@@ -241,6 +243,13 @@ def _validate(cfg: Config) -> None:
         raise ConfigError("internal: metrics_host must not be empty")
     if cfg.sensor.host.strip() == "":
         raise ConfigError("sensor: host must not be empty")
+    header_name = cfg.sensor.client_ip_header.strip()
+    if header_name and (
+        any(ch.isspace() for ch in header_name)
+        or ":" in header_name
+        or header_name != header_name.strip()
+    ):
+        raise ConfigError("sensor: client_ip_header must be a single valid header name")
     s = cfg.storage
     if s.probe_bytes > s.max_body_bytes:
         raise ConfigError("storage: probe_bytes must be <= max_body_bytes")
@@ -301,11 +310,16 @@ def _validate(cfg: Config) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", f.region):
             raise ConfigError("fleet: region must be 1-64 chars of [a-z0-9-]")
         url = f.collector_url[:-1] if f.collector_url.endswith("/") else f.collector_url
-        allowed_insecure = "http://localhost" in url or "http://127.0.0.1" in url
-        if not (url.startswith("https://") or allowed_insecure):
+        loopback_http = "http://localhost" in url or "http://127.0.0.1" in url
+        insecure_ok = (
+            loopback_http
+            or (f.allow_insecure_http and url.startswith("http://"))
+        )
+        if not (url.startswith("https://") or insecure_ok):
             raise ConfigError(
                 "fleet: collector_url must be an https:// URL "
-                "(http:// only to loopback hosts for lab testing)"
+                "(http:// only to loopback hosts for lab testing, or set "
+                "fleet.allow_insecure_http for isolated internal networks)"
             )
         if len(f.collector_token) < 32 or any(ch.isspace() for ch in f.collector_token):
             raise ConfigError("fleet: collector_token must be at least 32 chars without whitespace")
