@@ -1,52 +1,157 @@
+# Laptop fleet deployment: sensor + collector + cloudflared, one host.
+#
+# Topology (do not deviate from docs/DEPLOY-LAPTOP.md):
+#   * "fleet" network is internal: true — sensor and collector have no NAT
+#     egress at all and cannot be reached from outside the laptop.
+#   * cloudflared is attached to both "fleet" (to reach the sensor) and the
+#     default bridge (for its outbound tunnel). It is the only internet-facing
+#     component. Cloudflare's edge terminates TLS before the tunnel.
+#   * sensor and collector publish no ports. The collector is managed with
+#     `docker compose exec` only.
+#
+# Bring-up: cp .env.example .env (fill values) then
+#   docker compose --profile tunnel up -d --build
+#   scripts/e2e_laptop.py        (pre-deployment verification; optional)
+name: php2shell-laptop
+
+x-phptopwn-image: &phptopwn-image
+  image: phptopwn-fleet:local
+  build: .
+
+x-hardening: &hardening
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
-  honeypot:
-    build: .
-    container_name: php2shell-honeypot
-    restart: unless-stopped
-    ports:
-      - "80:8080"
-      - "443:8443"
-      # metrics stay off the public interface; scrape from localhost or join
-      # the container network instead of publishing 9091 publicly
-      - "127.0.0.1:9091:9091"
+  sensor:
+    <<: [*phptopwn-image, *hardening]
     environment:
       PHPTOPWN_HTTP_PORT: "8080"
       PHPTOPWN_TLS_PORT: "8443"
-      PHPTOPWN_METRICS_HOST: "0.0.0.0"
-      PHPTOPWN_METRICS_PORT: "9091"
-      PHPTOPWN_TLS: "true"
+      PHPTOPWN_TLS: "false"          # TLS terminates at the Cloudflare edge
       PHPTOPWN_LOG_DIR: "/app/logs"
       PHPTOPWN_CAPTURE_DIR: "/app/captured_payloads"
       PHPTOPWN_LOG_ALL: "true"
       PHPTOPWN_TRUST_PROXY_HEADERS: "false"
-      PHPTOPWN_MAX_BODY_BYTES: "33554432"
+      PHPTOPWN_CLIENT_IP_HEADER: "CF-Connecting-IP"
+      PHPTOPWN_SERVER_NAME: "${DECOY_HOSTNAME}"
+      PHPTOPWN_MAX_BODY_BYTES: "8388608"
       PHPTOPWN_BODY_TIMEOUT_SECONDS: "30"
+      PHPTOPWN_ENABLED: "true"
+      PHPTOPWN_NODE_ID: "${NODE_ID}"
+      PHPTOPWN_REGION: "${REGION}"
+      PHPTOPWN_COLLECTOR_URL: "http://collector:9443"
+      PHPTOPWN_COLLECTOR_TOKEN: "${FLEET_TOKEN}"
+      PHPTOPWN_ALLOW_INSECURE_HTTP: "true"
+      PHPTOPWN_BUFFER_DIR: "/app/fleet"
+      PHPTOPWN_FLUSH_INTERVAL_SECONDS: "2"
     volumes:
-      - ./logs:/app/logs
-      - ./captured_payloads:/app/captured_payloads
-      - ./certs:/app/certs
-    read_only: true
-    tmpfs:
-      - /tmp:size=128m,mode=1777
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+      - sensor-logs:/app/logs
+      - sensor-captures:/app/captured_payloads
+      - sensor-fleet:/app/fleet
+    networks:
+      - fleet
     mem_limit: 512m
     cpus: "1.0"
     pids_limit: 256
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+
+  collector:
+    <<: [*phptopwn-image, *hardening]
+    entrypoint: ["/usr/local/bin/collector-entrypoint.sh"]
+    environment:
+      FLEET_TOKEN: "${FLEET_TOKEN}"
+      NODE_ID: "${NODE_ID}"
+      REGION: "${REGION}"
+      COLLECTOR_DATA_DIR: "/data"
+    volumes:
+      - collector-data:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - fleet
+    mem_limit: 384m
+    cpus: "0.5"
+    pids_limit: 128
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9091/healthz', timeout=2).status == 200 else 1)"
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9443/healthz', timeout=2).status == 200 else 1)"
       interval: 30s
       timeout: 3s
+      start_period: 5s
       retries: 3
-      start_period: 10s
+
+  # Optional (profile "e2e"): drives the verification suite via
+  # scripts/e2e_laptop.py. Shares the sensor's log volume read-only so the
+  # replay phase can reuse real request_ids for the dedupe check.
+  driver:
+    <<: *phptopwn-image
+    profiles:
+      - e2e
+    volumes:
+      - ./scripts:/driver:ro
+      - sensor-logs:/sensor-logs:ro
+    environment:
+      FLEET_TOKEN: "${FLEET_TOKEN}"
+    networks:
+      - fleet
+    depends_on:
+      sensor:
+        condition: service_started
+      collector:
+        condition: service_started
+
+  # Optional (profile "e2e"): sits on the regular bridge network only, used to
+  # prove that a non-fleet network cannot reach the sensor or the collector.
+  probe:
+    <<: *phptopwn-image
+    profiles:
+      - e2e
+    volumes:
+      - ./scripts:/driver:ro
+    networks:
+      - default
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles:
+      - tunnel
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN}"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - fleet
+      - default
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  fleet:
+    internal: true
+
+volumes:
+  sensor-logs:
+  sensor-captures:
+  sensor-fleet:
+  collector-data:

@@ -31,11 +31,13 @@ RUN apt-get update \
 
 COPY --from=build /wheelhouse/*.whl /tmp/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+COPY docker/collector-entrypoint.sh /usr/local/bin/collector-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/collector-entrypoint.sh \
     && pip install --no-cache-dir /tmp/phptopwn-*.whl \
     && rm /tmp/*.whl \
-    && mkdir -p /app/logs /app/captured_payloads /app/certs \
-    && chown -R phptopwn:phptopwn /app
+    && mkdir -p /app/logs /app/captured_payloads /app/certs /app/fleet \
+    && mkdir -p /data/raw /data/ids /data/ioc-exports \
+    && chown -R phptopwn:phptopwn /app /data
 
 WORKDIR /app
 USER phptopwn

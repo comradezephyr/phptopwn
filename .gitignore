@@ -16,3 +16,5 @@ captured_payloads/
 certs/
 *.spool
 .DS_Store
+.env
+e2e-exports/
