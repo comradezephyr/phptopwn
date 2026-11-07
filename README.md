@@ -268,6 +268,10 @@ phptopwn-collect ioc --day 20261106 --out exports/  # per-IP + payload-hash expo
 report, dedupe); `docs/FLEET.md` is the deployment runbook with preflight
 gates and research-governance rules (freeze on code changes during a
 collection window, threshold-tuning log, no third-party egress from sensors).
+For the all-in-one laptop deployment (sensor + collector + Cloudflare
+tunnel, no published ports, egress-free internal network), follow
+`docs/DEPLOY-LAPTOP.md` — `docker-compose.yml`, `.env.example` and
+`scripts/e2e_laptop.py` belong to that path.
 
 ---
 

@@ -23,11 +23,32 @@ All notable changes to `phptopwn` are documented here. The format follows
   composition, recent events; no external assets, no scripts.
 - `docs/SCHEMA.md` (event + ingest contract) and `docs/FLEET.md` (runbook,
   egress lockdown, preflight gates, governance rules).
+- Laptop deployment: 3-service compose stack (sensor + collector +
+  cloudflared) with an internal, egress-free `fleet` network, no published
+  ports and tunnel-only ingress; collector config rendered by an entrypoint
+  from `.env`; `docs/DEPLOY-LAPTOP.md` runbook (DNS move to Cloudflare,
+  tunnel setup, 3-command bring-up); `scripts/e2e_laptop.py` end-to-end
+  verification (preflight storm/oversize/fuzz/fingerprint, capture, SIGKILL
+  byte-offset resume, stack-restart dedupe, IOC artefact verification,
+  network isolation probes) and `scripts/e2e_driver.py` (in-network stdlib
+  driver with traffic/storm/oversize/fuzz/fingerprint/probe/replay modes).
 
 ### Changed
 
 - `SENSOR_VERSION` now follows `phptopwn.__version__` (event records carry
   the running sensor version).
+- Session identity: `RequestCapture` and every telemetry record carry the
+  raw TCP peer separately (`client.peer_ip` / `client.peer_port`); with
+  `[sensor] client_ip_header` (e.g. `CF-Connecting-IP` behind a Cloudflare
+  tunnel) the header's value becomes the effective `client.ip`, falling back
+  to the raw peer. Source guard (rate + concurrency) keys on the effective
+  IP, so tunnel-mode limiting works per real client.
+- `[fleet] allow_insecure_http` opt-in permits plain `http://` collector URLs
+  on isolated internal networks (the laptop compose stack does exactly that);
+  without it the collector URL must be `https://` or a loopback address.
+- The source guard frees the per-IP concurrency slot when the response is
+  delivered instead of holding it across serialized store writes, and
+  rejected requests no longer decrement other requests' slots.
 - Coverage gate stays at 85%; fleet/collector/IOC/dashboard modules are
   covered by new test suites (`tests/test_fleet.py`,
   `tests/test_collector.py`).
